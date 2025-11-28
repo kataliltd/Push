@@ -1,0 +1,52 @@
+================================================================================
+INVOICE & DELIVERY NOTE RECONCILIATION REPORT
+================================================================================
+
+STEP 1: Items on Invoice but NOT on Delivery Note (5 items)
+--------------------------------------------------------------------------------
+
+1. GLOVES DISPOSABLE BLUE NITRILE 5G
+   Part Number(s): HAL9614105A
+   Quantity: 3 @ £6.58
+   Total Value: £19.74
+
+2. AURA 9322+ VALVED DUST/MIST RESPIRATOR FFP2 (SGL)
+   Part Number(s): CSP9590931Y
+   Quantity: 5 @ £3.80
+   Total Value: £19.00
+
+3. 18762 152x25.4x25.4 9SFNDBWL
+   Part Number(s): MMM2451659Z
+   Quantity: 2 @ £108.37
+   Total Value: £216.74
+
+4. GOPR4CH1600R032HBM KCU20 GOMILL
+   Part Number(s): KML1641896V
+   Quantity: 3 @ £77.78
+   Total Value: £233.34
+
+5. SHERWOOD STD TAP & DRILLCOMPOUND 500gm
+   Part Number(s): SHR7324040K
+   Quantity: 3 @ £7.66
+   Total Value: £22.98
+
+================================================================================
+STEP 2: Quantity Discrepancies (0 items)
+--------------------------------------------------------------------------------
+
+✓ No quantity discrepancies found
+
+================================================================================
+SUMMARY
+--------------------------------------------------------------------------------
+Total invoice items (unique): 18
+Total delivery items (unique): 11
+Items missing from delivery: 5
+Items with quantity discrepancies: 0
+
+Total value of missing items: £511.80
+Total value of items with discrepancies: £0.00
+Combined total: £511.80
+
+⚠ ACTION REQUIRED: Please review discrepancies above
+================================================================================

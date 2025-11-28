@@ -1,0 +1,162 @@
+[
+  {
+    "part_number": "PMT1060011P",
+    "description": "A12M-STFCR 11 BORING BAR",
+    "quantity": 2,
+    "price": 103.79,
+    "total_value": 207.58,
+    "unit": "EA"
+  },
+  {
+    "part_number": "PMT1060011P",
+    "description": "A12M-STFCR 11 BORING BAR",
+    "quantity": 1,
+    "price": 103.79,
+    "total_value": 103.79,
+    "unit": "EA"
+  },
+  {
+    "part_number": "SSF9601520K",
+    "description": "CLEAR PROTECTIVE OVERGLASSES",
+    "quantity": 2,
+    "price": 2.31,
+    "total_value": 4.62,
+    "unit": "EA"
+  },
+  {
+    "part_number": "PMT1201012P",
+    "description": "TCMT 110204E-FM INSERT GRADE",
+    "quantity": 4,
+    "price": 5.62,
+    "total_value": 22.48,
+    "unit": "EA"
+  },
+  {
+    "part_number": "PMT1201012P",
+    "description": "TCMT 110204E-FM INSERT GRADE",
+    "quantity": 1,
+    "price": 5.62,
+    "total_value": 5.62,
+    "unit": "EA"
+  },
+  {
+    "part_number": "ISC1143463M",
+    "description": "DNMG 110408-M3M INSERT GRADE",
+    "quantity": 3,
+    "price": 8.42,
+    "total_value": 25.26,
+    "unit": "EA"
+  },
+  {
+    "part_number": "SWT1091420C",
+    "description": "E100 HAND DEBURRING BLADESTEEL/ALUMINIUM",
+    "quantity": 2,
+    "price": 2.32,
+    "total_value": 4.64,
+    "unit": "EA"
+  },
+  {
+    "part_number": "ISC1316600W",
+    "description": "SOMT 120408-DT INSERT GRADE IC908",
+    "quantity": 4,
+    "price": 10.17,
+    "total_value": 40.68,
+    "unit": "EA"
+  },
+  {
+    "part_number": "ISC1153821T",
+    "description": "DNMG 060408-M3M INSERT GRADE",
+    "quantity": 8,
+    "price": 6.82,
+    "total_value": 54.56,
+    "unit": "EA"
+  },
+  {
+    "part_number": "ISC1152226Y",
+    "description": "CNMG 120408-M3M INSERT GRADE",
+    "quantity": 6,
+    "price": 8.90,
+    "total_value": 53.40,
+    "unit": "EA"
+  },
+  {
+    "part_number": "ISC1316880N",
+    "description": "TAG N3J INSERT GRADE IC807",
+    "quantity": 5,
+    "price": 9.44,
+    "total_value": 47.20,
+    "unit": "EA"
+  },
+  {
+    "part_number": "ISC1214520T",
+    "description": "16IR 8 UN THREADING INSERT GRADE",
+    "quantity": 3,
+    "price": 11.58,
+    "total_value": 34.74,
+    "unit": "EA"
+  },
+  {
+    "part_number": "DEB7105350G",
+    "description": "SOLOPOL LIME 4LTR",
+    "quantity": 2,
+    "price": 29.24,
+    "total_value": 58.48,
+    "unit": "EA"
+  },
+  {
+    "part_number": "HAL9614105A",
+    "description": "GLOVES DISPOSABLE BLUE NITRILE 5G",
+    "quantity": 3,
+    "price": 6.58,
+    "total_value": 19.74,
+    "unit": "PK"
+  },
+  {
+    "part_number": "CSP9590931Y",
+    "description": "AURA 9322+ VALVED DUST/MIST RESPIRATOR FFP2 (SGL)",
+    "quantity": 5,
+    "price": 3.80,
+    "total_value": 19.00,
+    "unit": "EA"
+  },
+  {
+    "part_number": "MMM2451659Z",
+    "description": "18762 152x25.4x25.4 9SFNDBWL",
+    "quantity": 2,
+    "price": 108.37,
+    "total_value": 216.74,
+    "unit": "EA"
+  },
+  {
+    "part_number": "KML1641896V",
+    "description": "GOPR4CH1600R032HBM KCU20 GOMILL",
+    "quantity": 3,
+    "price": 77.78,
+    "total_value": 233.34,
+    "unit": "EA"
+  },
+  {
+    "part_number": "SHR7324040K",
+    "description": "SHERWOOD STD TAP & DRILLCOMPOUND 500gm",
+    "quantity": 3,
+    "price": 7.66,
+    "total_value": 22.98,
+    "unit": "EA"
+  },
+  {
+    "part_number": "ISC1152969P",
+    "description": "SNMG 120412-M3M INSERT GRADE",
+    "quantity": 4,
+    "price": 7.86,
+    "total_value": 31.44,
+    "unit": "EA"
+  },
+  {
+    "part_number": "PMT1201011G",
+    "description": "SNMG 120408E-SF INSERT GRADE",
+    "quantity": 4,
+    "price": 7.07,
+    "total_value": 28.28,
+    "unit": "EA"
+  }
+]
