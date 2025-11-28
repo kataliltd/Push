@@ -33,37 +33,68 @@ def extract_invoice_items(text):
 
     debug_lines = []
 
-    for line in lines:
+    # Track previous lines for description lookup
+    prev_lines = []
+
+    for i, line in enumerate(lines):
         line = line.strip()
 
-        if not line or len(line) < 10:
+        if not line or len(line) < 5:
             continue
 
         # Skip headers and common text
         skip_patterns = [
-            r'^(?:CUSTOMER|INVOICE|DELIVERY|ADDRESS|ORDER|NUMBER|QTY|PRICE|DESCRIPTION|TOTAL|PAGE|DATE)',
+            r'^(?:CUSTOMER|INVOICE|DELIVERY|ADDRESS|ORDER|NUMBER|QTY|PRICE|DESCRIPTION|TOTAL|PAGE|DATE|TAXPOINT)',
             r'^[-=]+$',
             r'^\d+\s+of\s+\d+',
-            r'^(?:EA|PK)\s*$'
+            r'^(?:EA|PK)\s*$',
+            r'^Cromwell\s+Tools',
+            r'^Telephone|^Fax',
+            r'^\d{4}-\d{2}-\d{2}'
         ]
 
         if any(re.match(pattern, line, re.IGNORECASE) for pattern in skip_patterns):
             continue
 
-        # Match line item pattern
-        item_pattern = r'([A-Z][A-Z0-9\s\-\+\/]+?)\s+(\d+)\s+(\d+\.\d{2})\s+(EA|PK|PC|BOX|SET)\s+(?:\d+\s+)?(\d+\.\d{2})'
+        # NEW PATTERN: Match quantity/price line format
+        # Format: "2 103.790 EA 0.00 207.58 1" or "1 2.310 EA 0.00 4.62 1"
+        # Pattern: [QTY] [PRICE with 2-3 decimals] [UNIT] [DISCOUNT] [TOTAL] [optional extra digit]
+        item_pattern = r'^(\d+)\s+(\d+\.\d{2,3})\s+(EA|PK|PC|BOX|SET|EACH)\s+\d+\.\d+\s+(\d+\.\d+)'
 
         match = re.search(item_pattern, line, re.IGNORECASE)
 
         if match:
-            description = match.group(1).strip()
-            quantity = int(match.group(2))
-            price = float(match.group(3))
-            unit = match.group(4).upper()
-            total_value = float(match.group(5))
+            quantity = int(match.group(1))
+            price = float(match.group(2))
+            unit = match.group(3).upper()
+            total_value = float(match.group(4))
 
-            part_match = re.search(r'\b([A-Z]{2,}\d{3,}[A-Z0-9]*)\b', description)
-            part_number = part_match.group(1) if part_match else ""
+            # Look back 1-3 lines for description (product name)
+            description = ""
+            part_number = ""
+
+            for j in range(1, min(4, len(prev_lines) + 1)):
+                prev_line = prev_lines[-j] if len(prev_lines) >= j else ""
+
+                # Look for part number pattern (e.g., "Our part no. PMT1060011P")
+                if 'part no.' in prev_line.lower():
+                    part_match = re.search(r'([A-Z0-9]+[A-Z][A-Z0-9]+)', prev_line, re.IGNORECASE)
+                    if part_match:
+                        part_number = part_match.group(1).upper()
+
+                # Look for description (product name line - usually has caps and dashes)
+                elif re.search(r'^[A-Z0-9][A-Z0-9\s\-\/]+', prev_line) and len(prev_line) > 5:
+                    # Avoid lines that are addresses or headers
+                    if not re.search(r'(ACCOUNT|LANE|DERBYSHIRE|LIMITED|VEND)', prev_line):
+                        description = prev_line.strip()
+                        # Also try to extract part number from description
+                        if not part_number:
+                            part_match = re.search(r'\b([A-Z]{2,}\d{3,}[A-Z0-9\-]*)\b', description)
+                            if part_match:
+                                part_number = part_match.group(1)
+
+            if not description:
+                description = f"Item (see part no. {part_number})" if part_number else "Unknown item"
 
             items.append({
                 'description': description,
@@ -73,11 +104,16 @@ def extract_invoice_items(text):
                 'unit': unit,
                 'total_value': total_value
             })
-            debug_lines.append(f"✓ MATCHED: {line}")
+            debug_lines.append(f"✓ MATCHED: {line} -> {description[:40]}")
         else:
             # Keep track of lines that might be items but didn't match
-            if len(line) > 20 and not line.startswith(('CUSTOMER', 'INVOICE', 'DELIVERY', 'ADDRESS')):
+            if len(line) > 15 and not line.startswith(('CUSTOMER', 'INVOICE', 'DELIVERY', 'ADDRESS', 'WEST ', 'UNIT ')):
                 debug_lines.append(f"✗ NOT MATCHED: {line}")
+
+        # Keep track of previous lines for description lookup
+        prev_lines.append(line)
+        if len(prev_lines) > 5:
+            prev_lines.pop(0)
 
     return items, debug_lines
 
@@ -96,38 +132,100 @@ def extract_delivery_items(text):
         if not line or len(line) < 10:
             continue
 
-        # Skip headers
+        # Skip headers and garbled lines
         skip_patterns = [
-            r'^(?:QTY|QUANTITY|CODE|PART|DESCRIPTION|BRANCH|LINE)',
-            r'^[-=]+$'
+            r'^(?:QTY|QUANTITY|CODE|PART|DESCRIPTION|BRANCH|LINE|DELIVERY|ADVICE|NOTE)',
+            r'^[-=]+$',
+            r'^R\.gLte',  # Garbled OCR header
+            r'^VAI\s+Reg',
+            r'^\d+\s+Cho',  # Garbled address
+            r'^United\s+',
+            r'^VENDA\s+365',
+            r'lso\s*\d+',  # Garbled ISO numbers
+            r'^Registered\s+in'
         ]
 
         if any(re.match(pattern, line, re.IGNORECASE) for pattern in skip_patterns):
             continue
 
-        # Pattern: QTY CODE PART_NO DESCRIPTION BRANCH
-        item_pattern = r'^(\d+)\s+([A-Z]{2,3})\s+([A-Z0-9\-]+)\s+(.+?)(?:\s+([A-Z]{2,}-\d{2}))?$'
+        # NEW PATTERN: More flexible matching for delivery notes
+        # Format examples:
+        # "1 tsc1152169H WSFO18 CCMT"
+        # "1sc1152969P WSF149 SNMG 120412.M3M"
+        # Try multiple patterns:
 
-        match = re.search(item_pattern, line, re.IGNORECASE)
+        # Pattern 1: QTY PART_NUMBER CODE DESCRIPTION
+        # Example: "1 tsc1152169H WSFO18 CCMT"
+        pattern1 = r'^(\d+)\s+([a-z0-9]{8,})\s+([A-Z0-9]{3,})\s+(.+?)$'
+        match = re.search(pattern1, line, re.IGNORECASE)
 
         if match:
             quantity = int(match.group(1))
-            code = match.group(2).upper()
-            part_number = match.group(3)
+            part_number = match.group(2).upper()
+            code = match.group(3).upper()
             description = match.group(4).strip()
 
             items.append({
                 'quantity': quantity,
                 'part_number': part_number,
+                'code': code,
                 'description': description,
                 'price': 0.0,
                 'total_value': 0.0
             })
-            debug_lines.append(f"✓ MATCHED: {line}")
-        else:
-            # Keep track of potential item lines
-            if len(line) > 20 and re.match(r'^\d+', line):
-                debug_lines.append(f"✗ NOT MATCHED: {line}")
+            debug_lines.append(f"✓ MATCHED (P1): {line}")
+            continue
+
+        # Pattern 2: QTY+PART_NUMBER CODE DESCRIPTION (no space after qty)
+        # Example: "1sc1152969P WSF149 SNMG 120412.M3M"
+        pattern2 = r'^(\d+)([a-z]{2}[0-9]{7}[A-Z])\s+([A-Z0-9]{3,})\s+(.+?)$'
+        match = re.search(pattern2, line, re.IGNORECASE)
+
+        if match:
+            quantity = int(match.group(1))
+            part_number = match.group(2).upper()
+            code = match.group(3).upper()
+            description = match.group(4).strip()
+
+            items.append({
+                'quantity': quantity,
+                'part_number': part_number,
+                'code': code,
+                'description': description,
+                'price': 0.0,
+                'total_value': 0.0
+            })
+            debug_lines.append(f"✓ MATCHED (P2): {line}")
+            continue
+
+        # Pattern 3: Generic part number pattern (fallback)
+        # Just look for qty + part number with alphanumeric code
+        pattern3 = r'^(\d+)\s*([A-Z0-9\-]{6,})\s+(.+)$'
+        match = re.search(pattern3, line, re.IGNORECASE)
+
+        if match and len(line) > 15:
+            quantity = int(match.group(1))
+            part_number = match.group(2).upper()
+            description = match.group(3).strip()
+
+            # Extract code from description if possible
+            code_match = re.match(r'^([A-Z0-9]{3,})', description)
+            code = code_match.group(1) if code_match else ""
+
+            items.append({
+                'quantity': quantity,
+                'part_number': part_number,
+                'code': code,
+                'description': description,
+                'price': 0.0,
+                'total_value': 0.0
+            })
+            debug_lines.append(f"✓ MATCHED (P3): {line}")
+            continue
+
+        # Keep track of potential item lines that didn't match
+        if len(line) > 15 and re.match(r'^\d+', line):
+            debug_lines.append(f"✗ NOT MATCHED: {line}")
 
     return items, debug_lines
 
