@@ -2,6 +2,10 @@
 
 A Python tool for comparing invoice and delivery note data to identify discrepancies. Designed to handle OCR errors and match items with fuzzy text matching.
 
+> **📝 NEW: Getting Raw OCR Text Blobs?**
+>
+> If your OCR is returning unstructured text instead of JSON, see **[OCR_TEXT_GUIDE.md](OCR_TEXT_GUIDE.md)** for automatic text parsing!
+
 ## Features
 
 - **Smart Matching**: Handles OCR errors and extra text in descriptions (e.g., "INSERT GRADE" vs "INSERT GRADEIC6025")

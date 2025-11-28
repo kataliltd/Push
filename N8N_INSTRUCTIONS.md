@@ -1,5 +1,19 @@
 # Using the Reconciliation Code in n8n
 
+> **📝 IMPORTANT: Getting Raw OCR Text Instead of Structured Data?**
+>
+> If your OCR tool is returning a **text blob** like this:
+> ```
+> SALES INVOICE \\ Customer Account No: WE1573\\ TAXPOINT/DATE: 29/09/25...
+> ```
+> Instead of structured JSON, you need the **OCR Text Parser** version!
+>
+> **→ See [OCR_TEXT_GUIDE.md](OCR_TEXT_GUIDE.md) for the complete solution**
+>
+> **Use `n8n_ocr_reconcile.py` instead of `n8n_reconcile.py`**
+
+---
+
 ## Quick Start
 
 ### Step 1: Create Python Code Node
