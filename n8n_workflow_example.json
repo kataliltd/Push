@@ -1,0 +1,131 @@
+{
+  "name": "Invoice Delivery Reconciliation",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": []
+        },
+        "options": {},
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "invoice-data",
+              "name": "invoice",
+              "value": "={{ $json.invoice }}",
+              "type": "array"
+            },
+            {
+              "id": "delivery-data",
+              "name": "delivery",
+              "value": "={{ $json.delivery }}",
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "id": "prepare-data",
+      "name": "Prepare Input Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [450, 300],
+      "notes": "Format your data here. Replace with actual data source (Google Sheets, API, etc.)"
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "# Invoice & Delivery Note Reconciliation for n8n\n# See n8n_reconcile.py for the complete code\n# PASTE THE ENTIRE CONTENTS OF n8n_reconcile.py HERE\n\nimport re\nfrom collections import defaultdict\n\ndef normalize_text(text):\n    text = str(text).upper().strip()\n    text = re.sub(r'\\s+', ' ', text)\n    text = re.sub(r'\\s*[A-Z]{2}\\d+[A-Z]*\\s*$', '', text)\n    text = re.sub(r'^[^A-Z0-9]+', '', text)\n    text = re.sub(r'[^A-Z0-9]+$', '', text)\n    return text\n\ndef calculate_similarity(text1, text2):\n    norm1 = normalize_text(text1)\n    norm2 = normalize_text(text2)\n    if norm1 == norm2:\n        return 1.0\n    if norm1 in norm2 or norm2 in norm1:\n        shorter = min(len(norm1), len(norm2))\n        longer = max(len(norm1), len(norm2))\n        return shorter / longer\n    matches = sum(1 for a, b in zip(norm1, norm2) if a == b)\n    max_len = max(len(norm1), len(norm2))\n    return matches / max_len if max_len > 0 else 0.0\n\ndef texts_match(text1, text2, threshold=0.85):\n    ratio = calculate_similarity(text1, text2)\n    norm1 = normalize_text(text1)\n    norm2 = normalize_text(text2)\n    substring_match = (norm1 in norm2) or (norm2 in norm1)\n    return ratio >= threshold or (substring_match and ratio >= 0.7)\n\ndef aggregate_items(items):\n    aggregated = defaultdict(lambda: {\n        'quantity': 0.0,\n        'total_value': 0.0,\n        'price': 0.0,\n        'part_numbers': set(),\n        'original_description': '',\n        'items': []\n    })\n    for item in items:\n        key = normalize_text(item.get('description', ''))\n        if not aggregated[key]['original_description']:\n            aggregated[key]['original_description'] = item.get('description', '')\n        aggregated[key]['quantity'] += float(item.get('quantity', 0))\n        aggregated[key]['total_value'] += float(item.get('total_value', 0))\n        part_num = item.get('part_number', '')\n        if part_num:\n            aggregated[key]['part_numbers'].add(part_num)\n        aggregated[key]['items'].append(item)\n        price = float(item.get('price', 0))\n        if price > 0 and aggregated[key]['price'] == 0:\n            aggregated[key]['price'] = price\n    return dict(aggregated)\n\ndef find_matching_key(target_key, search_dict):\n    for key in search_dict.keys():\n        if texts_match(target_key, key):\n            return key\n    return None\n\ndef reconcile(invoice_items, delivery_items):\n    invoice_agg = aggregate_items(invoice_items)\n    delivery_agg = aggregate_items(delivery_items)\n    missing_items = []\n    quantity_discrepancies = []\n    for inv_key, inv_data in invoice_agg.items():\n        matching_key = find_matching_key(inv_key, delivery_agg)\n        if matching_key is None:\n            missing_items.append({\n                'description': inv_data['original_description'],\n                'part_numbers': list(inv_data['part_numbers']),\n                'quantity': inv_data['quantity'],\n                'price': inv_data['price'],\n                'total_value': inv_data['total_value'],\n                'num_lines': len(inv_data['items'])\n            })\n        else:\n            del_data = delivery_agg[matching_key]\n            if inv_data['quantity'] > del_data['quantity']:\n                quantity_discrepancies.append({\n                    'description': inv_data['original_description'],\n                    'part_numbers': list(inv_data['part_numbers']),\n                    'invoice_quantity': inv_data['quantity'],\n                    'delivery_quantity': del_data['quantity'],\n                    'difference': inv_data['quantity'] - del_data['quantity'],\n                    'price': inv_data['price'],\n                    'total_value': inv_data['total_value'],\n                    'invoice_lines': len(inv_data['items']),\n                    'delivery_lines': len(del_data['items'])\n                })\n    total_missing_value = sum(item['total_value'] for item in missing_items)\n    total_discrepancy_value = sum(item['total_value'] for item in quantity_discrepancies)\n    return {\n        'missing_items': missing_items,\n        'quantity_discrepancies': quantity_discrepancies,\n        'stats': {\n            'invoice_items': len(invoice_agg),\n            'delivery_items': len(delivery_agg),\n            'missing_count': len(missing_items),\n            'discrepancy_count': len(quantity_discrepancies),\n            'missing_value': total_missing_value,\n            'discrepancy_value': total_discrepancy_value,\n            'total_value': total_missing_value + total_discrepancy_value\n        }\n    }\n\ndef format_report(results):\n    lines = []\n    lines.append(\"=\" * 80)\n    lines.append(\"INVOICE & DELIVERY NOTE RECONCILIATION REPORT\")\n    lines.append(\"=\" * 80)\n    lines.append(\"\")\n    missing = results['missing_items']\n    lines.append(f\"STEP 1: Items on Invoice but NOT on Delivery Note ({len(missing)} items)\")\n    lines.append(\"-\" * 80)\n    if missing:\n        for i, item in enumerate(missing, 1):\n            lines.append(f\"\\n{i}. {item['description']}\")\n            part_nums = ', '.join(filter(None, item['part_numbers']))\n            if part_nums:\n                lines.append(f\"   Part Number(s): {part_nums}\")\n            lines.append(f\"   Quantity: {item['quantity']:.0f} @ £{item['price']:.2f}\")\n            lines.append(f\"   Total Value: £{item['total_value']:.2f}\")\n            if item['num_lines'] > 1:\n                lines.append(f\"   (Aggregated from {item['num_lines']} invoice lines)\")\n    else:\n        lines.append(\"\\n✓ All invoice items found on delivery note\")\n    lines.append(\"\\n\" + \"=\" * 80)\n    discrepancies = results['quantity_discrepancies']\n    lines.append(f\"STEP 2: Quantity Discrepancies ({len(discrepancies)} items)\")\n    lines.append(\"-\" * 80)\n    if discrepancies:\n        for i, item in enumerate(discrepancies, 1):\n            lines.append(f\"\\n{i}. {item['description']}\")\n            part_nums = ', '.join(filter(None, item['part_numbers']))\n            if part_nums:\n                lines.append(f\"   Part Number(s): {part_nums}\")\n            lines.append(f\"   Invoice Quantity: {item['invoice_quantity']:.0f}\")\n            lines.append(f\"   Delivery Quantity: {item['delivery_quantity']:.0f}\")\n            lines.append(f\"   ⚠ Difference: {item['difference']:.0f} (Invoice has MORE)\")\n            lines.append(f\"   Price: £{item['price']:.2f}\")\n            lines.append(f\"   Total Value: £{item['total_value']:.2f}\")\n            if item['invoice_lines'] > 1 or item['delivery_lines'] > 1:\n                lines.append(f\"   (Invoice: {item['invoice_lines']} lines, Delivery: {item['delivery_lines']} lines)\")\n    else:\n        lines.append(\"\\n✓ No quantity discrepancies found\")\n    lines.append(\"\\n\" + \"=\" * 80)\n    stats = results['stats']\n    lines.append(\"SUMMARY\")\n    lines.append(\"-\" * 80)\n    lines.append(f\"Total invoice items (unique): {stats['invoice_items']}\")\n    lines.append(f\"Total delivery items (unique): {stats['delivery_items']}\")\n    lines.append(f\"Items missing from delivery: {stats['missing_count']}\")\n    lines.append(f\"Items with quantity discrepancies: {stats['discrepancy_count']}\")\n    lines.append(\"\")\n    lines.append(f\"Total value of missing items: £{stats['missing_value']:.2f}\")\n    lines.append(f\"Total value of items with discrepancies: £{stats['discrepancy_value']:.2f}\")\n    lines.append(f\"Combined total: £{stats['total_value']:.2f}\")\n    lines.append(\"\")\n    if stats['missing_count'] > 0 or stats['discrepancy_count'] > 0:\n        lines.append(\"⚠ ACTION REQUIRED: Please review discrepancies above\")\n    else:\n        lines.append(\"✓ Invoice and delivery note match perfectly!\")\n    lines.append(\"=\" * 80)\n    return \"\\n\".join(lines)\n\n# n8n execution\ninput_data = items[0]['json']\ninvoice_items = input_data.get('invoice', [])\ndelivery_items = input_data.get('delivery', [])\nresults = reconcile(invoice_items, delivery_items)\nresults['report_text'] = format_report(results)\nreturn [{'json': results}]"
+      },
+      "id": "python-reconcile",
+      "name": "Reconcile Invoice & Delivery",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300],
+      "notes": "Python reconciliation engine - handles fuzzy matching and aggregation"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-discrepancies",
+              "leftValue": "={{ $json.stats.missing_count + $json.stats.discrepancy_count }}",
+              "rightValue": "0",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-discrepancies",
+      "name": "Check If Discrepancies Found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [850, 300],
+      "notes": "Route to different actions based on whether issues found"
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Input Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Input Data": {
+      "main": [
+        [
+          {
+            "node": "Reconcile Invoice & Delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reconcile Invoice & Delivery": {
+      "main": [
+        [
+          {
+            "node": "Check If Discrepancies Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-01-01T00:00:00.000Z",
+  "versionId": "1"
+}
