@@ -245,12 +245,15 @@ class OCRTextParser:
         """
         Extract line items from delivery note OCR text
 
-        Delivery notes typically have:
-        - Quantity
-        - Part number (format: 3 letters + 7 digits + 1 letter, e.g., PMT1060011P)
-        - Code (optional)
-        - Description
-        - Branch/location (optional)
+        Delivery notes typically have TWO formats:
+        FORMAT 1 (all on one line): "QTY PART_NUMBER CODE DESCRIPTION"
+        FORMAT 2 (multi-line - each field on separate line):
+            Line 1: QTY
+            Line 2: PART_NUMBER
+            Line 3: CODE
+            Line 4+: DESCRIPTION (spread across multiple lines)
+
+        This parser handles BOTH formats.
         """
         items = []
 
@@ -263,8 +266,112 @@ class OCRTextParser:
         # Track previous lines for multi-line items
         prev_lines = []
 
-        for line in lines:
-            line = line.strip()
+        # Process lines with index to enable multi-line lookahead
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+
+            # FIRST: Try multi-line format (each field on separate line)
+            # Pattern: Line is just a number (quantity), followed by part number, code, description
+            if line.isdigit() and 1 <= int(line) <= 999:
+                # Potential quantity found, check if next lines are part number and code
+                if i + 2 < len(lines):
+                    potential_qty = int(line)
+                    potential_pn = lines[i + 1].strip()
+                    potential_code = lines[i + 2].strip()
+
+                    # Helper functions (defined inline to access within loop)
+                    def normalize_part_number_ml(pn: str) -> str:
+                        """Normalize part number: remove spaces, uppercase, fix OCR errors"""
+                        pn = pn.replace(' ', '').upper()
+                        # Fix common OCR errors: leading '1' -> 'I', leading '0' -> 'O'
+                        if pn and pn[0] in '10':
+                            if pn[0] == '1':
+                                pn = 'I' + pn[1:]
+                            elif pn[0] == '0':
+                                pn = 'O' + pn[1:]
+                        return pn
+
+                    def is_valid_part_number_ml(pn: str) -> bool:
+                        """Validate part number format"""
+                        pn = pn.replace(' ', '').upper()
+                        if len(pn) < 9:
+                            return False
+                        # Fix OCR errors
+                        if pn[0].isdigit():
+                            if pn[0] == '1':
+                                pn = 'I' + pn[1:]
+                            elif pn[0] == '0':
+                                pn = 'O' + pn[1:]
+                            elif pn[0] in '23456789':
+                                return False
+                        if not re.match(r'^[A-Z]{2,4}', pn):
+                            return False
+                        if not re.search(r'\d{4,}', pn):
+                            return False
+                        if not re.match(r'^[A-Z]{2,4}\d{4,}[A-Z0-9]$', pn):
+                            return False
+                        invalid_patterns = [
+                            r'INSERT', r'GRADE', r'TOOL', r'BAR', r'BORING',
+                            r'PROTECTIVE', r'GLASS', r'HAND', r'BLADE'
+                        ]
+                        if any(re.search(pattern, pn, re.IGNORECASE) for pattern in invalid_patterns):
+                            return False
+                        return True
+
+                    def is_valid_code(code: str) -> bool:
+                        """Check if string looks like a product code"""
+                        code = code.strip().upper()
+                        # Codes are typically 3-10 alphanumeric characters
+                        if 3 <= len(code) <= 15:
+                            # Should contain some letters and/or digits
+                            if re.match(r'^[A-Z0-9\-]+$', code):
+                                return True
+                        return False
+
+                    # Check if potential part number and code are valid
+                    if is_valid_part_number_ml(potential_pn) and is_valid_code(potential_code):
+                        # Valid multi-line item found!
+                        normalized_pn = normalize_part_number_ml(potential_pn)
+
+                        # Collect description from subsequent lines (up to 5 lines or next quantity)
+                        description_parts = []
+                        desc_idx = i + 3
+                        while desc_idx < len(lines) and desc_idx < i + 8:
+                            desc_line = lines[desc_idx].strip()
+                            # Stop if we hit another quantity (lone digit) or empty line
+                            if not desc_line:
+                                break
+                            if desc_line.isdigit() and 1 <= int(desc_line) <= 999:
+                                break
+                            # Skip branch/bin codes (like "AB02-1", "M12-7")
+                            if re.match(r'^[A-Z]{2}\d{2}-\d{1,2}$', desc_line):
+                                break
+                            if re.match(r'^[A-Z]{1}\d{2}-\d{1,2}$', desc_line):
+                                break
+                            description_parts.append(desc_line)
+                            desc_idx += 1
+
+                        description = ' '.join(description_parts) if description_parts else potential_code
+
+                        items.append({
+                            'quantity': potential_qty,
+                            'part_number': normalized_pn,
+                            'code': potential_code.upper(),
+                            'description': description,
+                            'branch': '',
+                            'price': 0.0,
+                            'total_value': 0.0,
+                            'source_line': f"{line} | {potential_pn} | {potential_code}"
+                        })
+
+                        # Skip ahead past this item (qty + pn + code + description lines)
+                        i = desc_idx
+                        continue
+
+            # Continue to single-line format handling below
+            i += 1
+            line = lines[i-1].strip()  # Get current line for single-line processing
 
             if not line or len(line) < 10:
                 continue
@@ -313,12 +420,29 @@ class OCRTextParser:
                 - ISC1152169H (3 letters + 7 digits + 1 letter)
                 - DEB7105350G (3 letters + 7 digits + 1 letter)
                 - SWT1091420C (3 letters + 7 digits + 1 letter)
+                - tsc1152169H (lowercase variants due to OCR)
+                - sHR0850530E (mixed case)
+                - 1sc1152169H (leading '1' is OCR error for 'I')
                 """
+                # Remove any spaces (OCR errors)
+                pn = pn.replace(' ', '').upper()
+
                 # Must be at least 9 characters (e.g., ABC1234567D = 11 chars)
                 if len(pn) < 9:
                     return False
 
-                # Should start with letters (2-3 chars)
+                # Common OCR errors: leading digits that should be letters
+                # Fix: 1 -> I, 0 -> O (only at the start)
+                if pn[0].isdigit():
+                    if pn[0] == '1':
+                        pn = 'I' + pn[1:]
+                    elif pn[0] == '0':
+                        pn = 'O' + pn[1:]
+                    # If it starts with other digits (2-9), likely not a part number
+                    elif pn[0] in '23456789':
+                        return False
+
+                # Should start with letters (2-4 chars) after OCR correction
                 if not re.match(r'^[A-Z]{2,4}', pn):
                     return False
 
@@ -341,14 +465,26 @@ class OCRTextParser:
                 return True
 
             # Pattern 1: QTY PART_NUMBER CODE DESCRIPTION
-            # Example: "5 PMT1201012P TCMT INSERT"
+            # Example: "5 PMT1201012P TCMT INSERT" or "6 tsc1152169H wsFo18 CCMT..."
             # Part number must be valid format (3 letters + digits + letter)
-            pattern1 = r'^(\d{1,3})\s+([A-Z]{2,4}\d{6,}[A-Z0-9])\s+([A-Z0-9]{3,})\s+(.+)$'
-            match = re.search(pattern1, line, re.IGNORECASE)
+            # Use [A-Za-z0-9] to match alphanumeric (OCR often turns 'I' into '1', 'O' into '0')
+            pattern1 = r'^(\d{1,3})\s+([A-Za-z0-9]{2,4}\s?\d{6,}[A-Za-z0-9])\s+([A-Za-z0-9]{3,})\s+(.+)$'
+            match = re.search(pattern1, line)
+
+            def normalize_part_number(pn: str) -> str:
+                """Normalize part number: remove spaces, uppercase, fix OCR errors"""
+                pn = pn.replace(' ', '').upper()
+                # Fix common OCR errors: leading '1' -> 'I', leading '0' -> 'O'
+                if pn and pn[0] in '10':
+                    if pn[0] == '1':
+                        pn = 'I' + pn[1:]
+                    elif pn[0] == '0':
+                        pn = 'O' + pn[1:]
+                return pn
 
             if match:
                 quantity = int(match.group(1))
-                part_number = match.group(2).upper()
+                part_number = normalize_part_number(match.group(2))
                 code = match.group(3).upper()
                 description = match.group(4).strip()
 
@@ -371,12 +507,12 @@ class OCRTextParser:
 
             # Pattern 2: QTY+PART_NUMBER CODE DESCRIPTION (no space after qty)
             # Example: "5PMT1201012P TCMT INSERT"
-            pattern2 = r'^(\d{1,3})([A-Z]{2,4}\d{6,}[A-Z0-9])\s+([A-Z0-9]{3,})\s+(.+)$'
-            match = re.search(pattern2, line, re.IGNORECASE)
+            pattern2 = r'^(\d{1,3})([A-Za-z0-9]{2,4}\s?\d{6,}[A-Za-z0-9])\s+([A-Za-z0-9]{3,})\s+(.+)$'
+            match = re.search(pattern2, line)
 
             if match:
                 quantity = int(match.group(1))
-                part_number = match.group(2).upper()
+                part_number = normalize_part_number(match.group(2))
                 code = match.group(3).upper()
                 description = match.group(4).strip()
 
@@ -399,19 +535,19 @@ class OCRTextParser:
 
             # Pattern 3: QTY PART_NUMBER DESCRIPTION (no separate code)
             # Example: "5 PMT1201012P TCMT 110204E-FM INSERT"
-            pattern3 = r'^(\d{1,3})\s+([A-Z]{2,4}\d{6,}[A-Z0-9])\s+(.+)$'
-            match = re.search(pattern3, line, re.IGNORECASE)
+            pattern3 = r'^(\d{1,3})\s+([A-Za-z0-9]{2,4}\s?\d{6,}[A-Za-z0-9])\s+(.+)$'
+            match = re.search(pattern3, line)
 
             if match:
                 quantity = int(match.group(1))
-                part_number = match.group(2).upper()
+                part_number = normalize_part_number(match.group(2))
                 description = match.group(3).strip()
 
                 # Validate part number format
                 if is_valid_part_number(part_number):
                     # Try to extract code from beginning of description
-                    code_match = re.match(r'^([A-Z0-9]{3,8})\s+', description)
-                    code = code_match.group(1) if code_match else ""
+                    code_match = re.match(r'^([A-Za-z0-9]{3,8})\s+', description)
+                    code = code_match.group(1).upper() if code_match else ""
 
                     items.append({
                         'quantity': quantity,
