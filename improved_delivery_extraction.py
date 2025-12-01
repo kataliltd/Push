@@ -89,9 +89,11 @@ def is_valid_code(code):
     """Check if string looks like a product code"""
     code = code.strip().upper()
     # Codes are typically 3-15 alphanumeric characters
+    # Allow common OCR artifacts like +, *, /, etc.
     if 3 <= len(code) <= 15:
         # Should contain some letters and/or digits
-        if re.match(r'^[A-Z0-9\-]+$', code):
+        # Allow more symbols due to OCR errors
+        if re.match(r'^[A-Z0-9\-\+\*\/]+$', code):
             return True
     return False
 
@@ -286,6 +288,37 @@ def extract_delivery_items_improved(text):
 
                 items.append({
                     'quantity': quantity,
+                    'part_number': part_number,
+                    'code': code,
+                    'description': description,
+                    'price': 0.0,
+                    'total_value': 0.0
+                })
+                continue
+
+        # FALLBACK Pattern: Line with part number but no clear quantity
+        # Example: "rsc1316880N wsF491 TAG N3J INSERT" or "tscl 152226W wsrsz+ CNMG..."
+        # This catches items where quantity field is completely missing/mangled
+        # Pattern: [junk] PART_NUMBER [CODE] [DESCRIPTION]
+        # Strip any leading junk (non-letter) first
+        fallback_line = re.sub(r'^[^A-Za-z]+', '', cleaned_line)
+
+        # Pattern: PART_NUMBER CODE DESCRIPTION (no quantity)
+        # More lenient: match a token that looks like a part number (letters+digits+spaces, 9+ chars)
+        # Then a code (3-15 chars), then description
+        fallback_pattern = r'^([A-Za-z0-9\'\s]{9,}?)\s+([A-Za-z0-9\-\+\*\/]{3,15})\s+(.+)$'
+        match = re.search(fallback_pattern, fallback_line)
+
+        if match:
+            part_number = normalize_part_number(match.group(1))
+            code = match.group(2).upper()
+            description = match.group(3).strip()
+
+            # Validate part number format
+            if is_valid_part_number(part_number):
+                # Use quantity = 1 as default for items with missing quantity
+                items.append({
+                    'quantity': 1,
                     'part_number': part_number,
                     'code': code,
                     'description': description,
