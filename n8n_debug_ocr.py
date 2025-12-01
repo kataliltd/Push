@@ -45,6 +45,7 @@ def extract_invoice_items(text):
         # Skip headers and common text
         skip_patterns = [
             r'^(?:CUSTOMER|INVOICE|DELIVERY|ADDRESS|ORDER|NUMBER|QTY|PRICE|DESCRIPTION|TOTAL|PAGE|DATE|TAXPOINT)',
+            r'^(?:DEL|CUSTOMER)\s+(?:ADV|ORDER)',  # Skip "DEL ADV NUMBER", "CUSTOMER ORDER" etc
             r'^[-=]+$',
             r'^\d+\s+of\s+\d+',
             r'^(?:EA|PK)\s*$',
@@ -78,20 +79,27 @@ def extract_invoice_items(text):
 
                 # Look for part number pattern (e.g., "Our part no. PMT1060011P")
                 if 'part no.' in prev_line.lower():
-                    part_match = re.search(r'([A-Z0-9]+[A-Z][A-Z0-9]+)', prev_line, re.IGNORECASE)
+                    # Extract the part number AFTER "part no."
+                    part_match = re.search(r'part\s+no[.:\s]+([A-Z0-9]{6,})', prev_line, re.IGNORECASE)
                     if part_match:
                         part_number = part_match.group(1).upper()
 
                 # Look for description (product name line - usually has caps and dashes)
                 elif re.search(r'^[A-Z0-9][A-Z0-9\s\-\/]+', prev_line) and len(prev_line) > 5:
                     # Avoid lines that are addresses or headers
-                    if not re.search(r'(ACCOUNT|LANE|DERBYSHIRE|LIMITED|VEND)', prev_line):
-                        description = prev_line.strip()
-                        # Also try to extract part number from description
-                        if not part_number:
-                            part_match = re.search(r'\b([A-Z]{2,}\d{3,}[A-Z0-9\-]*)\b', description)
-                            if part_match:
-                                part_number = part_match.group(1)
+                    # IMPORTANT: Also avoid lines with decimal numbers (these are quantity/price lines)
+                    # Skip address components (LANE, DERBYSHIRE, postcodes, etc)
+                    if not re.search(r'(ACCOUNT|LANE|DERBYSHIRE|LIMITED|VEND|UNIT\s+\d+|ROAD|STREET|AVENUE|DRIVE)', prev_line, re.IGNORECASE):
+                        # Skip UK postcodes (e.g., S18 2XA, DE21 7BF)
+                        if not re.match(r'^[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}$', prev_line.strip()):
+                            # Check if line contains decimal numbers (quantity/price pattern)
+                            if not re.search(r'\d+\.\d+', prev_line):
+                                description = prev_line.strip()
+                                # Also try to extract part number from description
+                                if not part_number:
+                                    part_match = re.search(r'\b([A-Z]{2,}\d{3,}[A-Z0-9\-]*)\b', description)
+                                    if part_match:
+                                        part_number = part_match.group(1)
 
             if not description:
                 description = f"Item (see part no. {part_number})" if part_number else "Unknown item"
