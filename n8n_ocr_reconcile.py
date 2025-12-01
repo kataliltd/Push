@@ -203,6 +203,9 @@ def strip_markdown_json(text):
 
 def is_json_data(text):
     """Check if text appears to be JSON data rather than raw OCR text"""
+    # Check if it's already a parsed dict/list object
+    if isinstance(text, (dict, list)):
+        return True
     text = str(text).strip()
     # Check for markdown JSON wrapper
     if text.startswith('```json'):
@@ -253,9 +256,13 @@ def parse_json_invoice_data(json_text):
     }
 
     try:
-        # Strip markdown wrapper and parse JSON
-        clean_text = strip_markdown_json(json_text)
-        data = json.loads(clean_text)
+        # Check if data is already parsed as dict/list
+        if isinstance(json_text, (dict, list)):
+            data = json_text
+        else:
+            # Strip markdown wrapper and parse JSON
+            clean_text = strip_markdown_json(json_text)
+            data = json.loads(clean_text)
 
         # Extract invoice data
         invoice = data.get('invoice', {})
@@ -321,9 +328,13 @@ def parse_json_delivery_data(json_text):
     }
 
     try:
-        # Strip markdown wrapper and parse JSON
-        clean_text = strip_markdown_json(json_text)
-        data = json.loads(clean_text)
+        # Check if data is already parsed as dict/list
+        if isinstance(json_text, (dict, list)):
+            data = json_text
+        else:
+            # Strip markdown wrapper and parse JSON
+            clean_text = strip_markdown_json(json_text)
+            data = json.loads(clean_text)
 
         # Extract delivery notes
         delivery_notes = data.get('delivery_notes', [])
@@ -915,58 +926,141 @@ def format_report(results):
 # n8n EXECUTION
 # ============================================================================
 
-# Get input data from n8n
-input_data = items[0]['json']
-
-# Extract invoice and delivery text from input
-invoice_text = input_data.get('invoice_text', input_data.get('text', ''))
-delivery_text = input_data.get('delivery_text', '')
-
-# If you're using separate OCR nodes for invoice and delivery,
-# they might come from different items:
-# invoice_text = items[0]['json'].get('text', '')
-# delivery_text = items[1]['json'].get('text', '') if len(items) > 1 else ''
-
-# Detect data format and parse accordingly
-if is_json_data(invoice_text):
-    # NEW FORMAT: Pre-parsed JSON data
-    invoice_items, invoice_metadata = parse_json_invoice_data(invoice_text)
-else:
-    # OLD FORMAT: Raw OCR text
-    invoice_metadata = extract_invoice_metadata(invoice_text)
-    invoice_items = extract_invoice_items(invoice_text)
-
-if is_json_data(delivery_text):
-    # NEW FORMAT: Pre-parsed JSON data
-    delivery_items, delivery_metadata = parse_json_delivery_data(delivery_text)
-else:
-    # OLD FORMAT: Raw OCR text
-    delivery_metadata = extract_delivery_metadata(delivery_text)
-    delivery_items = extract_delivery_items(delivery_text)
-
-# Run reconciliation
-results = reconcile(invoice_items, delivery_items)
-
-# Add formatted report text
-results['report_text'] = format_report(results)
-
-# Add metadata
-results['metadata'] = {
-    'invoice_number': invoice_metadata['invoice_number'],
-    'invoice_date': invoice_metadata['invoice_date'],
-    'customer_account': invoice_metadata['customer_account'],
-    'customer_name': invoice_metadata['customer_name'],
-    'delivery_number': delivery_metadata['delivery_number'],
-    'delivery_date': delivery_metadata['delivery_date']
+# Initialize error tracking and debug info
+parsing_errors = []
+debug_info = {
+    'invoice_items_extracted': 0,
+    'delivery_items_extracted': 0,
+    'invoice_text_length': 0,
+    'delivery_text_length': 0,
+    'invoice_text_type': '',
+    'delivery_text_type': '',
+    'invoice_is_json': False,
+    'delivery_is_json': False,
+    'parsing_errors': []
 }
 
-# Add debug info showing how many items were extracted
-results['debug'] = {
-    'invoice_items_extracted': len(invoice_items),
-    'delivery_items_extracted': len(delivery_items),
-    'invoice_text_length': len(invoice_text),
-    'delivery_text_length': len(delivery_text)
-}
+try:
+    # Get input data from n8n
+    input_data = items[0]['json']
 
-# Return results to n8n
-return [{'json': results}]
+    # Extract invoice and delivery text from input
+    invoice_text = input_data.get('invoice_text', input_data.get('text', ''))
+    delivery_text = input_data.get('delivery_text', '')
+
+    # If you're using separate OCR nodes for invoice and delivery,
+    # they might come from different items:
+    # invoice_text = items[0]['json'].get('text', '')
+    # delivery_text = items[1]['json'].get('text', '') if len(items) > 1 else ''
+
+    # Record debug info about input data
+    debug_info['invoice_text_type'] = type(invoice_text).__name__
+    debug_info['delivery_text_type'] = type(delivery_text).__name__
+    debug_info['invoice_text_length'] = len(str(invoice_text)) if invoice_text else 0
+    debug_info['delivery_text_length'] = len(str(delivery_text)) if delivery_text else 0
+
+    # Detect data format and parse accordingly
+    invoice_items = []
+    invoice_metadata = {
+        'invoice_number': '',
+        'customer_account': '',
+        'customer_name': '',
+        'invoice_date': ''
+    }
+
+    if invoice_text:
+        try:
+            debug_info['invoice_is_json'] = is_json_data(invoice_text)
+
+            if debug_info['invoice_is_json']:
+                # NEW FORMAT: Pre-parsed JSON data
+                invoice_items, invoice_metadata = parse_json_invoice_data(invoice_text)
+            else:
+                # OLD FORMAT: Raw OCR text
+                invoice_metadata = extract_invoice_metadata(invoice_text)
+                invoice_items = extract_invoice_items(invoice_text)
+        except Exception as e:
+            error_msg = f"Invoice parsing error: {type(e).__name__}: {str(e)}"
+            parsing_errors.append(error_msg)
+            debug_info['parsing_errors'].append(error_msg)
+
+    debug_info['invoice_items_extracted'] = len(invoice_items)
+
+    # Parse delivery data
+    delivery_items = []
+    delivery_metadata = {
+        'delivery_number': '',
+        'customer_name': '',
+        'delivery_date': ''
+    }
+
+    if delivery_text:
+        try:
+            debug_info['delivery_is_json'] = is_json_data(delivery_text)
+
+            if debug_info['delivery_is_json']:
+                # NEW FORMAT: Pre-parsed JSON data
+                delivery_items, delivery_metadata = parse_json_delivery_data(delivery_text)
+            else:
+                # OLD FORMAT: Raw OCR text
+                delivery_metadata = extract_delivery_metadata(delivery_text)
+                delivery_items = extract_delivery_items(delivery_text)
+        except Exception as e:
+            error_msg = f"Delivery parsing error: {type(e).__name__}: {str(e)}"
+            parsing_errors.append(error_msg)
+            debug_info['parsing_errors'].append(error_msg)
+
+    debug_info['delivery_items_extracted'] = len(delivery_items)
+
+    # Add sample items to debug output
+    if invoice_items:
+        debug_info['invoice_sample'] = invoice_items[0]
+    if delivery_items:
+        debug_info['delivery_sample'] = delivery_items[0]
+
+    # Run reconciliation
+    results = reconcile(invoice_items, delivery_items)
+
+    # Add formatted report text
+    results['report_text'] = format_report(results)
+
+    # Add metadata
+    results['metadata'] = {
+        'invoice_number': invoice_metadata['invoice_number'],
+        'invoice_date': invoice_metadata['invoice_date'],
+        'customer_account': invoice_metadata['customer_account'],
+        'customer_name': invoice_metadata['customer_name'],
+        'delivery_number': delivery_metadata['delivery_number'],
+        'delivery_date': delivery_metadata['delivery_date']
+    }
+
+    # Add debug info
+    results['debug'] = debug_info
+
+    # Add parsing errors if any
+    if parsing_errors:
+        results['errors'] = parsing_errors
+
+    # Return results to n8n
+    return [{'json': results}]
+
+except Exception as e:
+    # Catch-all error handler
+    error_msg = f"Fatal error: {type(e).__name__}: {str(e)}"
+    return [{
+        'json': {
+            'error': error_msg,
+            'debug': debug_info,
+            'missing_items': [],
+            'quantity_discrepancies': [],
+            'stats': {
+                'invoice_items': 0,
+                'delivery_items': 0,
+                'missing_count': 0,
+                'discrepancy_count': 0,
+                'missing_value': 0,
+                'discrepancy_value': 0,
+                'total_value': 0
+            }
+        }
+    }]
