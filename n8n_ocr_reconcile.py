@@ -2,20 +2,22 @@
 Invoice & Delivery Note Reconciliation for n8n - OCR Text Version
 Copy this entire code into an n8n Python Code node
 
-This version handles RAW OCR TEXT OUTPUT (text blobs) instead of pre-structured data.
+This version handles BOTH:
+1. RAW OCR TEXT OUTPUT (text blobs)
+2. PRE-PARSED JSON DATA (structured invoice/delivery data)
 
 INPUT FORMAT:
-The node expects input with ONE item containing raw OCR text:
+Option 1 - Raw OCR text:
 {
     "invoice_text": "SALES INVOICE Customer Account No: WE1573 TAXPOINT/DATE: 29/09/25...",
     "delivery_text": "DELIVERY NOTE Qty Code Part No Description..."
 }
 
-Or alternatively, if your workflow has the text in a 'text' field from the OCR node:
+Option 2 - Pre-parsed JSON data (wrapped in markdown):
 {
-    "text": "SALES INVOICE Customer Account No: WE1573..."
+    "invoice_text": "```json\\n{\\n  \\"invoice\\": {...}\\n}\\n```",
+    "delivery_text": "```json\\n{\\n  \\"delivery_notes\\": [...]\\n}\\n```"
 }
-In this case, provide both invoice and delivery OCR outputs separately.
 
 OUTPUT FORMAT:
 Returns a single item with:
@@ -33,6 +35,7 @@ Returns a single item with:
 """
 
 import re
+import json
 from collections import defaultdict
 
 # ============================================================================
@@ -183,6 +186,172 @@ def extract_invoice_items(text):
             prev_lines.pop(0)
 
     return items
+
+
+# ============================================================================
+# JSON DATA PARSER (for pre-parsed structured data)
+# ============================================================================
+
+def strip_markdown_json(text):
+    """Remove markdown code block wrappers from JSON strings"""
+    text = str(text).strip()
+    # Remove ```json and ``` wrappers
+    text = re.sub(r'^```json\s*', '', text)
+    text = re.sub(r'\s*```$', '', text)
+    return text.strip()
+
+
+def is_json_data(text):
+    """Check if text appears to be JSON data rather than raw OCR text"""
+    text = str(text).strip()
+    # Check for markdown JSON wrapper
+    if text.startswith('```json'):
+        return True
+    # Check if it starts with { or [
+    stripped = strip_markdown_json(text)
+    return stripped.startswith('{') or stripped.startswith('[')
+
+
+def parse_json_invoice_data(json_text):
+    """
+    Parse pre-structured JSON invoice data
+
+    Expected format:
+    {
+      "invoice": {
+        "invoice_number": "0012415278",
+        "invoice_date": "29/09/25",
+        "customer_account": "WE1573",
+        "pages": [
+          {
+            "page": 1,
+            "line_items": [
+              {
+                "date": "2025-09-22",
+                "del_adv_number": "0012816646",
+                "description": "A12M-STFCR 11 BORING BAR",
+                "part_no": "PMT1060011P",
+                "qty": "2",
+                "price": "103.790",
+                "unit": "EA",
+                "discount": "0.00",
+                "total_value": "207.58"
+              },
+              ...
+            ]
+          }
+        ]
+      }
+    }
+    """
+    items = []
+    metadata = {
+        'invoice_number': '',
+        'customer_account': '',
+        'customer_name': '',
+        'invoice_date': ''
+    }
+
+    try:
+        # Strip markdown wrapper and parse JSON
+        clean_text = strip_markdown_json(json_text)
+        data = json.loads(clean_text)
+
+        # Extract invoice data
+        invoice = data.get('invoice', {})
+
+        # Extract metadata
+        metadata['invoice_number'] = invoice.get('invoice_number', '')
+        metadata['invoice_date'] = invoice.get('invoice_date', '')
+        metadata['customer_account'] = invoice.get('customer_account', '')
+        metadata['customer_name'] = invoice.get('customer_name', '')
+
+        # Extract line items from all pages
+        pages = invoice.get('pages', [])
+        for page in pages:
+            line_items = page.get('line_items', [])
+            for item in line_items:
+                items.append({
+                    'description': item.get('description', ''),
+                    'part_number': item.get('part_no', ''),
+                    'quantity': float(item.get('qty', 0)),
+                    'price': float(item.get('price', 0)),
+                    'unit': item.get('unit', 'EA'),
+                    'total_value': float(item.get('total_value', 0))
+                })
+
+    except (json.JSONDecodeError, ValueError, AttributeError) as e:
+        # If JSON parsing fails, return empty results
+        print(f"Warning: Failed to parse JSON invoice data: {e}")
+
+    return items, metadata
+
+
+def parse_json_delivery_data(json_text):
+    """
+    Parse pre-structured JSON delivery data
+
+    Expected format:
+    {
+      "delivery_notes": [
+        {
+          "page": 1,
+          "delivery_note_number": "IMS-20575866",
+          "date": "19/09/2025",
+          "time": "08:38",
+          "line_items": [
+            {
+              "qty": "6",
+              "code": "PMT1291012F",
+              "part_no": "WSF568",
+              "description": "TCMT 110204E-FM INSERT GRADE T8430",
+              "branch_bin": "AB02-10"
+            },
+            ...
+          ]
+        }
+      ]
+    }
+    """
+    items = []
+    metadata = {
+        'delivery_number': '',
+        'customer_name': '',
+        'delivery_date': ''
+    }
+
+    try:
+        # Strip markdown wrapper and parse JSON
+        clean_text = strip_markdown_json(json_text)
+        data = json.loads(clean_text)
+
+        # Extract delivery notes
+        delivery_notes = data.get('delivery_notes', [])
+
+        if delivery_notes:
+            # Use first delivery note for metadata
+            first_note = delivery_notes[0]
+            metadata['delivery_number'] = first_note.get('delivery_note_number', '')
+            metadata['delivery_date'] = first_note.get('date', '')
+
+        # Extract line items from all delivery notes
+        for note in delivery_notes:
+            line_items = note.get('line_items', [])
+            for item in line_items:
+                items.append({
+                    'quantity': float(item.get('qty', 0)),
+                    'part_number': item.get('code', ''),  # Note: 'code' field maps to part_number
+                    'code': item.get('part_no', ''),      # Note: 'part_no' field maps to code
+                    'description': item.get('description', ''),
+                    'price': 0.0,  # Delivery notes don't have prices
+                    'total_value': 0.0
+                })
+
+    except (json.JSONDecodeError, ValueError, AttributeError) as e:
+        # If JSON parsing fails, return empty results
+        print(f"Warning: Failed to parse JSON delivery data: {e}")
+
+    return items, metadata
 
 
 def extract_delivery_metadata(text):
@@ -749,7 +918,7 @@ def format_report(results):
 # Get input data from n8n
 input_data = items[0]['json']
 
-# Extract OCR text from input
+# Extract invoice and delivery text from input
 invoice_text = input_data.get('invoice_text', input_data.get('text', ''))
 delivery_text = input_data.get('delivery_text', '')
 
@@ -758,12 +927,22 @@ delivery_text = input_data.get('delivery_text', '')
 # invoice_text = items[0]['json'].get('text', '')
 # delivery_text = items[1]['json'].get('text', '') if len(items) > 1 else ''
 
-# Parse OCR text to extract structured data
-invoice_metadata = extract_invoice_metadata(invoice_text)
-invoice_items = extract_invoice_items(invoice_text)
+# Detect data format and parse accordingly
+if is_json_data(invoice_text):
+    # NEW FORMAT: Pre-parsed JSON data
+    invoice_items, invoice_metadata = parse_json_invoice_data(invoice_text)
+else:
+    # OLD FORMAT: Raw OCR text
+    invoice_metadata = extract_invoice_metadata(invoice_text)
+    invoice_items = extract_invoice_items(invoice_text)
 
-delivery_metadata = extract_delivery_metadata(delivery_text)
-delivery_items = extract_delivery_items(delivery_text)
+if is_json_data(delivery_text):
+    # NEW FORMAT: Pre-parsed JSON data
+    delivery_items, delivery_metadata = parse_json_delivery_data(delivery_text)
+else:
+    # OLD FORMAT: Raw OCR text
+    delivery_metadata = extract_delivery_metadata(delivery_text)
+    delivery_items = extract_delivery_items(delivery_text)
 
 # Run reconciliation
 results = reconcile(invoice_items, delivery_items)
