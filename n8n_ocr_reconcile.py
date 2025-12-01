@@ -255,17 +255,27 @@ def parse_json_invoice_data(json_text):
         'invoice_date': ''
     }
 
+    debug_info = {}
+
     try:
         # Check if data is already parsed as dict/list
         if isinstance(json_text, (dict, list)):
             data = json_text
+            debug_info['source'] = 'already_parsed_object'
         else:
             # Strip markdown wrapper and parse JSON
             clean_text = strip_markdown_json(json_text)
             data = json.loads(clean_text)
+            debug_info['source'] = 'parsed_from_string'
+
+        # Debug: Check what keys are in the top-level data
+        debug_info['top_level_keys'] = list(data.keys()) if isinstance(data, dict) else 'not_a_dict'
+        debug_info['data_type'] = type(data).__name__
 
         # Extract invoice data
         invoice = data.get('invoice', {})
+        debug_info['invoice_found'] = bool(invoice)
+        debug_info['invoice_keys'] = list(invoice.keys()) if isinstance(invoice, dict) else 'not_a_dict'
 
         # Extract metadata
         metadata['invoice_number'] = invoice.get('invoice_number', '')
@@ -275,8 +285,12 @@ def parse_json_invoice_data(json_text):
 
         # Extract line items from all pages
         pages = invoice.get('pages', [])
-        for page in pages:
+        debug_info['pages_count'] = len(pages)
+
+        for page_idx, page in enumerate(pages):
             line_items = page.get('line_items', [])
+            debug_info[f'page_{page_idx}_items'] = len(line_items)
+
             for item in line_items:
                 items.append({
                     'description': item.get('description', ''),
@@ -289,9 +303,11 @@ def parse_json_invoice_data(json_text):
 
     except (json.JSONDecodeError, ValueError, AttributeError) as e:
         # If JSON parsing fails, return empty results
-        print(f"Warning: Failed to parse JSON invoice data: {e}")
+        error_msg = f"Failed to parse JSON invoice data: {e}"
+        print(f"Warning: {error_msg}")
+        debug_info['error'] = error_msg
 
-    return items, metadata
+    return items, metadata, debug_info
 
 
 def parse_json_delivery_data(json_text):
@@ -327,17 +343,26 @@ def parse_json_delivery_data(json_text):
         'delivery_date': ''
     }
 
+    debug_info = {}
+
     try:
         # Check if data is already parsed as dict/list
         if isinstance(json_text, (dict, list)):
             data = json_text
+            debug_info['source'] = 'already_parsed_object'
         else:
             # Strip markdown wrapper and parse JSON
             clean_text = strip_markdown_json(json_text)
             data = json.loads(clean_text)
+            debug_info['source'] = 'parsed_from_string'
+
+        # Debug: Check what keys are in the top-level data
+        debug_info['top_level_keys'] = list(data.keys()) if isinstance(data, dict) else 'not_a_dict'
+        debug_info['data_type'] = type(data).__name__
 
         # Extract delivery notes
         delivery_notes = data.get('delivery_notes', [])
+        debug_info['delivery_notes_count'] = len(delivery_notes)
 
         if delivery_notes:
             # Use first delivery note for metadata
@@ -346,8 +371,10 @@ def parse_json_delivery_data(json_text):
             metadata['delivery_date'] = first_note.get('date', '')
 
         # Extract line items from all delivery notes
-        for note in delivery_notes:
+        for note_idx, note in enumerate(delivery_notes):
             line_items = note.get('line_items', [])
+            debug_info[f'note_{note_idx}_items'] = len(line_items)
+
             for item in line_items:
                 items.append({
                     'quantity': float(item.get('qty', 0)),
@@ -360,9 +387,11 @@ def parse_json_delivery_data(json_text):
 
     except (json.JSONDecodeError, ValueError, AttributeError) as e:
         # If JSON parsing fails, return empty results
-        print(f"Warning: Failed to parse JSON delivery data: {e}")
+        error_msg = f"Failed to parse JSON delivery data: {e}"
+        print(f"Warning: {error_msg}")
+        debug_info['error'] = error_msg
 
-    return items, metadata
+    return items, metadata, debug_info
 
 
 def extract_delivery_metadata(text):
@@ -974,7 +1003,8 @@ try:
 
             if debug_info['invoice_is_json']:
                 # NEW FORMAT: Pre-parsed JSON data
-                invoice_items, invoice_metadata = parse_json_invoice_data(invoice_text)
+                invoice_items, invoice_metadata, invoice_parse_debug = parse_json_invoice_data(invoice_text)
+                debug_info['invoice_parse_debug'] = invoice_parse_debug
             else:
                 # OLD FORMAT: Raw OCR text
                 invoice_metadata = extract_invoice_metadata(invoice_text)
@@ -1000,7 +1030,8 @@ try:
 
             if debug_info['delivery_is_json']:
                 # NEW FORMAT: Pre-parsed JSON data
-                delivery_items, delivery_metadata = parse_json_delivery_data(delivery_text)
+                delivery_items, delivery_metadata, delivery_parse_debug = parse_json_delivery_data(delivery_text)
+                debug_info['delivery_parse_debug'] = delivery_parse_debug
             else:
                 # OLD FORMAT: Raw OCR text
                 delivery_metadata = extract_delivery_metadata(delivery_text)
