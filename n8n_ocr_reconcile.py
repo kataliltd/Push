@@ -240,8 +240,8 @@ def extract_delivery_items(text):
     prev_lines = []
 
     def normalize_part_number(pn):
-        """Normalize part number: remove spaces, uppercase, fix OCR errors"""
-        pn = pn.replace(' ', '').upper()
+        """Normalize part number: remove spaces/apostrophes, uppercase, fix OCR errors"""
+        pn = pn.replace(' ', '').replace("'", '').upper()
         # Fix common OCR errors: leading '1' -> 'I', leading '0' -> 'O'
         if pn and pn[0] in '10':
             if pn[0] == '1':
@@ -256,11 +256,12 @@ def extract_delivery_items(text):
         Expected formats:
         - PMT1060011P (3 letters + 7 digits + 1 letter)
         - ISC1152169H (3 letters + 7 digits + 1 letter)
+        - HAL96'14183A (with apostrophe from OCR)
         - tsc1152169H (lowercase variants due to OCR)
         - 1sc1152169H (leading '1' is OCR error for 'I')
         """
-        # Remove any spaces (OCR errors)
-        pn = pn.replace(' ', '').upper()
+        # Remove any spaces and apostrophes (OCR errors)
+        pn = pn.replace(' ', '').replace("'", '').upper()
 
         # Must be at least 9 characters
         if len(pn) < 9:
@@ -320,8 +321,11 @@ def extract_delivery_items(text):
             # Potential quantity found, check if next lines are part number and code
             if i + 2 < len(lines):
                 potential_qty = int(line)
-                potential_pn = lines[i + 1].strip()
+                potential_pn_raw = lines[i + 1].strip()
                 potential_code = lines[i + 2].strip()
+
+                # Strip leading symbols from part number (e.g., "-\ rsc1316880N" -> "rsc1316880N")
+                potential_pn = re.sub(r'^[^A-Za-z0-9]+', '', potential_pn_raw)
 
                 # Check if potential part number and code are valid
                 if is_valid_part_number(potential_pn) and is_valid_code(potential_code):
@@ -368,6 +372,24 @@ def extract_delivery_items(text):
         if not line or len(line) < 10:
             continue
 
+        # **KEY IMPROVEMENT**: Strip leading OCR artifacts
+        # Remove leading symbols and letters that aren't part of the quantity
+        # Patterns like: "--\- rz 12 ...", "-+" 1 ...", "-\ 12 ...", "-\z 1...", "-\'s 1...", "1',l, 1...", etc.
+        # Strategy: Strip everything before the first digit, then also strip symbols AFTER the first digits
+        # Step 1: Remove everything before first digit
+        cleaned_line = re.sub(r'^[^0-9]+', '', line)
+        # Step 2: If line starts with digit(s), remove any symbols/junk between digits and alphanumeric part number
+        # Pattern: "1',l, 1sc..." -> "1 1sc..." (removes ',l, ')
+        # Pattern: "12z abc..." -> "12 abc..." (removes 'z ')
+        if cleaned_line and cleaned_line[0].isdigit():
+            # Match: [digits][any junk][part number starting with letter]
+            # Replace with: [digits] [part number]
+            cleaned_line = re.sub(r'^(\d{1,3})[^\d\sA-Za-z]*\s*', r'\1 ', cleaned_line)
+
+        # If we stripped too much or nothing changed, try original line
+        if not cleaned_line or len(cleaned_line) < 10:
+            cleaned_line = line
+
         # Skip headers and garbled lines
         skip_patterns = [
             r'^(?:QTY|QUANTITY|CODE|PART|DESCRIPTION|BRANCH|LINE|DELIVERY|ADVICE|NOTE|DEL\s+ADV)',
@@ -389,25 +411,21 @@ def extract_delivery_items(text):
             r'^[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}$'
         ]
 
-        if any(re.match(pattern, line, re.IGNORECASE) for pattern in skip_patterns):
-            prev_lines.append(line)
-            if len(prev_lines) > 3:
-                prev_lines.pop(0)
+        if any(re.match(pattern, cleaned_line, re.IGNORECASE) for pattern in skip_patterns):
             continue
 
         # Skip lines that look like invoice item lines (contain prices with decimals)
         # Invoice lines have patterns like "2 103.790 EA 0.00 207.58"
-        if re.search(r'\d+\s+\d+\.\d{2,3}\s+(?:EA|PK|PC|BOX|SET)', line, re.IGNORECASE):
-            prev_lines.append(line)
-            if len(prev_lines) > 3:
-                prev_lines.pop(0)
+        if re.search(r'\d+\s+\d+\.\d{2,3}\s+(?:EA|PK|PC|BOX|SET)', cleaned_line, re.IGNORECASE):
             continue
 
-        # Pattern 1: QTY PART_NUMBER CODE DESCRIPTION
-        # Example: "5 PMT1201012P TCMT INSERT" or "6 tsc1152169H wsFo18 CCMT..."
-        # Use [A-Za-z0-9] to match alphanumeric (OCR often turns 'I' into '1', 'O' into '0')
-        pattern1 = r'^(\d{1,3})\s+([A-Za-z0-9]{2,4}\s?\d{6,}[A-Za-z0-9])\s+([A-Za-z0-9]{3,})\s+(.+)$'
-        match = re.search(pattern1, line)
+        # Pattern 1: QTY [SYMBOLS] PART_NUMBER CODE DESCRIPTION
+        # Example: "5 PMT1201012P TCMT INSERT" or "6 tsc1152169H wsFo18 CCMT..." or "3 .V PMT1201012P ..." or "2 HAL96'14183A ..."
+        # Allow optional symbols (NOT letters) between QTY and PART_NUMBER (e.g., ".", "'", ",", etc.)
+        # Allow spaces and apostrophes within part numbers (e.g., "lscl 152612F", "HAL96'14183A")
+        # Pattern: QTY [optional symbols only] PART_NUMBER (with possible spaces/apostrophes) CODE DESCRIPTION
+        pattern1 = r'^(\d{1,3})\s+[^\d\sA-Za-z]{0,4}\s*([A-Za-z0-9\'\s]{2,}\d{5,}[A-Za-z0-9]*)\s+([A-Za-z0-9\-\']{3,})\s+(.+)$'
+        match = re.search(pattern1, cleaned_line)
 
         if match:
             quantity = int(match.group(1))
@@ -425,15 +443,13 @@ def extract_delivery_items(text):
                     'price': 0.0,
                     'total_value': 0.0
                 })
-                prev_lines.append(line)
-                if len(prev_lines) > 3:
-                    prev_lines.pop(0)
                 continue
 
         # Pattern 2: QTY+PART_NUMBER CODE DESCRIPTION (no space after qty)
-        # Example: "5PMT1201012P TCMT INSERT"
-        pattern2 = r'^(\d{1,3})([A-Za-z0-9]{2,4}\s?\d{6,}[A-Za-z0-9])\s+([A-Za-z0-9]{3,})\s+(.+)$'
-        match = re.search(pattern2, line)
+        # Example: "5PMT1201012P TCMT INSERT" or "3PMT1201012P ..."
+        # Allow apostrophes in part numbers (e.g., HAL96'14183A)
+        pattern2 = r'^(\d{1,3})([A-Za-z0-9\'\s]{2,4}\d{5,}[A-Za-z0-9]*)\s+([A-Za-z0-9\-\']{3,})\s+(.+)$'
+        match = re.search(pattern2, cleaned_line)
 
         if match:
             quantity = int(match.group(1))
@@ -451,15 +467,14 @@ def extract_delivery_items(text):
                     'price': 0.0,
                     'total_value': 0.0
                 })
-                prev_lines.append(line)
-                if len(prev_lines) > 3:
-                    prev_lines.pop(0)
                 continue
 
-        # Pattern 3: QTY PART_NUMBER DESCRIPTION (no separate code)
-        # Example: "5 PMT1201012P TCMT 110204E-FM INSERT"
-        pattern3 = r'^(\d{1,3})\s+([A-Za-z0-9]{2,4}\s?\d{6,}[A-Za-z0-9])\s+(.+)$'
-        match = re.search(pattern3, line)
+        # Pattern 3: QTY [SYMBOLS] PART_NUMBER DESCRIPTION (no separate code)
+        # Example: "5 PMT1201012P TCMT 110204E-FM INSERT" or "2 HAL96'14183A ..."
+        # Allow optional symbols between QTY and PART_NUMBER
+        # Allow apostrophes and spaces in part numbers
+        pattern3 = r'^(\d{1,3})\s+[^\d\s]{0,4}\s*([A-Za-z0-9\'\s]{2,4}\d{5,}[A-Za-z0-9]*)\s+(.+)$'
+        match = re.search(pattern3, cleaned_line)
 
         if match:
             quantity = int(match.group(1))
@@ -480,15 +495,7 @@ def extract_delivery_items(text):
                     'price': 0.0,
                     'total_value': 0.0
                 })
-                prev_lines.append(line)
-                if len(prev_lines) > 3:
-                    prev_lines.pop(0)
                 continue
-
-        # Keep track of previous lines
-        prev_lines.append(line)
-        if len(prev_lines) > 3:
-            prev_lines.pop(0)
 
     return items
 
