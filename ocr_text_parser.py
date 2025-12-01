@@ -247,10 +247,10 @@ class OCRTextParser:
 
         Delivery notes typically have:
         - Quantity
-        - Code
-        - Part number
+        - Part number (format: 3 letters + 7 digits + 1 letter, e.g., PMT1060011P)
+        - Code (optional)
         - Description
-        - Branch/location
+        - Branch/location (optional)
         """
         items = []
 
@@ -260,11 +260,8 @@ class OCRTextParser:
         # Split into lines
         lines = text.split('\n')
 
-        # Pattern for delivery note line items
-        # Due to OCR quality issues, we need multiple fallback patterns
-        # Examples from actual OCR:
-        # "1 tsc1152169H WSFO18 CCMT"
-        # "1sc1152969P WSF149 SNMG 120412.M3M"
+        # Track previous lines for multi-line items
+        prev_lines = []
 
         for line in lines:
             line = line.strip()
@@ -274,7 +271,7 @@ class OCRTextParser:
 
             # Skip headers and garbled lines
             skip_patterns = [
-                r'^(?:QTY|QUANTITY|CODE|PART|DESCRIPTION|BRANCH|LINE|DELIVERY|ADVICE|NOTE)',
+                r'^(?:QTY|QUANTITY|CODE|PART|DESCRIPTION|BRANCH|LINE|DELIVERY|ADVICE|NOTE|DEL\s+ADV)',
                 r'^[-=]+$',
                 r'^R\.gLte',  # Garbled OCR header
                 r'^VAI\s+Reg',
@@ -282,17 +279,71 @@ class OCRTextParser:
                 r'^United\s+',
                 r'^VENDA\s+365',
                 r'lso\s*\d+',  # Garbled ISO numbers
-                r'^Registered\s+in'
+                r'^Registered\s+in',
+                r'^(?:CUSTOMER|INVOICE|ADDRESS|ORDER|NUMBER|PRICE|TOTAL|PAGE|DATE|TAXPOINT)',
+                r'^Cromwell\s+Tools',
+                r'^Telephone|^Fax',
+                r'^\d{4}-\d{2}-\d{2}',
+                # Skip address-like lines
+                r'(?:LANE|DERBYSHIRE|LIMITED|UNIT\s+\d+|ROAD|STREET|AVENUE|DRIVE)',
+                # Skip UK postcodes
+                r'^[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}$'
             ]
 
             if any(re.match(pattern, line, re.IGNORECASE) for pattern in skip_patterns):
+                prev_lines.append(line)
+                if len(prev_lines) > 3:
+                    prev_lines.pop(0)
                 continue
 
-            # Try multiple patterns to handle OCR variations
+            # Skip lines that look like invoice item lines (contain prices with decimals)
+            # Invoice lines have patterns like "2 103.790 EA 0.00 207.58"
+            if re.search(r'\d+\s+\d+\.\d{2,3}\s+(?:EA|PK|PC|BOX|SET)', line, re.IGNORECASE):
+                prev_lines.append(line)
+                if len(prev_lines) > 3:
+                    prev_lines.pop(0)
+                continue
+
+            # Helper function to validate part numbers
+            def is_valid_part_number(pn: str) -> bool:
+                """
+                Check if string looks like a valid part number
+                Expected formats:
+                - PMT1060011P (3 letters + 7 digits + 1 letter)
+                - ISC1152169H (3 letters + 7 digits + 1 letter)
+                - DEB7105350G (3 letters + 7 digits + 1 letter)
+                - SWT1091420C (3 letters + 7 digits + 1 letter)
+                """
+                # Must be at least 9 characters (e.g., ABC1234567D = 11 chars)
+                if len(pn) < 9:
+                    return False
+
+                # Should start with letters (2-3 chars)
+                if not re.match(r'^[A-Z]{2,4}', pn):
+                    return False
+
+                # Should contain digits
+                if not re.search(r'\d{4,}', pn):
+                    return False
+
+                # Should end with letter or digit
+                if not re.match(r'^[A-Z]{2,4}\d{4,}[A-Z0-9]$', pn):
+                    return False
+
+                # Should NOT contain common description words
+                invalid_patterns = [
+                    r'INSERT', r'GRADE', r'TOOL', r'BAR', r'BORING',
+                    r'PROTECTIVE', r'GLASS', r'HAND', r'BLADE'
+                ]
+                if any(re.search(pattern, pn, re.IGNORECASE) for pattern in invalid_patterns):
+                    return False
+
+                return True
 
             # Pattern 1: QTY PART_NUMBER CODE DESCRIPTION
-            # Example: "1 tsc1152169H WSFO18 CCMT"
-            pattern1 = r'^(\d+)\s+([a-z0-9]{8,})\s+([A-Z0-9]{3,})\s+(.+?)$'
+            # Example: "5 PMT1201012P TCMT INSERT"
+            # Part number must be valid format (3 letters + digits + letter)
+            pattern1 = r'^(\d{1,3})\s+([A-Z]{2,4}\d{6,}[A-Z0-9])\s+([A-Z0-9]{3,})\s+(.+)$'
             match = re.search(pattern1, line, re.IGNORECASE)
 
             if match:
@@ -301,21 +352,26 @@ class OCRTextParser:
                 code = match.group(3).upper()
                 description = match.group(4).strip()
 
-                items.append({
-                    'quantity': quantity,
-                    'part_number': part_number,
-                    'code': code,
-                    'description': description,
-                    'branch': '',
-                    'price': 0.0,
-                    'total_value': 0.0,
-                    'source_line': line
-                })
-                continue
+                # Validate part number format
+                if is_valid_part_number(part_number):
+                    items.append({
+                        'quantity': quantity,
+                        'part_number': part_number,
+                        'code': code,
+                        'description': description,
+                        'branch': '',
+                        'price': 0.0,
+                        'total_value': 0.0,
+                        'source_line': line
+                    })
+                    prev_lines.append(line)
+                    if len(prev_lines) > 3:
+                        prev_lines.pop(0)
+                    continue
 
             # Pattern 2: QTY+PART_NUMBER CODE DESCRIPTION (no space after qty)
-            # Example: "1sc1152969P WSF149 SNMG 120412.M3M"
-            pattern2 = r'^(\d+)([a-z]{2}[0-9]{7}[A-Z])\s+([A-Z0-9]{3,})\s+(.+?)$'
+            # Example: "5PMT1201012P TCMT INSERT"
+            pattern2 = r'^(\d{1,3})([A-Z]{2,4}\d{6,}[A-Z0-9])\s+([A-Z0-9]{3,})\s+(.+)$'
             match = re.search(pattern2, line, re.IGNORECASE)
 
             if match:
@@ -324,42 +380,58 @@ class OCRTextParser:
                 code = match.group(3).upper()
                 description = match.group(4).strip()
 
-                items.append({
-                    'quantity': quantity,
-                    'part_number': part_number,
-                    'code': code,
-                    'description': description,
-                    'branch': '',
-                    'price': 0.0,
-                    'total_value': 0.0,
-                    'source_line': line
-                })
-                continue
+                # Validate part number format
+                if is_valid_part_number(part_number):
+                    items.append({
+                        'quantity': quantity,
+                        'part_number': part_number,
+                        'code': code,
+                        'description': description,
+                        'branch': '',
+                        'price': 0.0,
+                        'total_value': 0.0,
+                        'source_line': line
+                    })
+                    prev_lines.append(line)
+                    if len(prev_lines) > 3:
+                        prev_lines.pop(0)
+                    continue
 
-            # Pattern 3: Generic part number pattern (fallback)
-            # Just look for qty + part number with alphanumeric code
-            pattern3 = r'^(\d+)\s*([A-Z0-9\-]{6,})\s+(.+)$'
+            # Pattern 3: QTY PART_NUMBER DESCRIPTION (no separate code)
+            # Example: "5 PMT1201012P TCMT 110204E-FM INSERT"
+            pattern3 = r'^(\d{1,3})\s+([A-Z]{2,4}\d{6,}[A-Z0-9])\s+(.+)$'
             match = re.search(pattern3, line, re.IGNORECASE)
 
-            if match and len(line) > 15:
+            if match:
                 quantity = int(match.group(1))
                 part_number = match.group(2).upper()
                 description = match.group(3).strip()
 
-                # Extract code from description if possible
-                code_match = re.match(r'^([A-Z0-9]{3,})', description)
-                code = code_match.group(1) if code_match else ""
+                # Validate part number format
+                if is_valid_part_number(part_number):
+                    # Try to extract code from beginning of description
+                    code_match = re.match(r'^([A-Z0-9]{3,8})\s+', description)
+                    code = code_match.group(1) if code_match else ""
 
-                items.append({
-                    'quantity': quantity,
-                    'part_number': part_number,
-                    'code': code,
-                    'description': description,
-                    'branch': '',
-                    'price': 0.0,
-                    'total_value': 0.0,
-                    'source_line': line
-                })
+                    items.append({
+                        'quantity': quantity,
+                        'part_number': part_number,
+                        'code': code,
+                        'description': description,
+                        'branch': '',
+                        'price': 0.0,
+                        'total_value': 0.0,
+                        'source_line': line
+                    })
+                    prev_lines.append(line)
+                    if len(prev_lines) > 3:
+                        prev_lines.pop(0)
+                    continue
+
+            # Keep track of previous lines
+            prev_lines.append(line)
+            if len(prev_lines) > 3:
+                prev_lines.pop(0)
 
         return items
 
