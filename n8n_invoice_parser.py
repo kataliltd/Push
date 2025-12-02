@@ -11,7 +11,12 @@ import re
 # Process each item in the n8n workflow
 for item in items:
     # Get the input data from the item
+    # n8n passes data as JsProxy objects, convert to Python first
     input_data = item.json
+
+    # Convert JsProxy to Python object if needed
+    if hasattr(input_data, 'to_py'):
+        input_data = input_data.to_py()
 
     # Try to find the text content in various possible structures
     text_content = None
