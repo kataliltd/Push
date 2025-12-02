@@ -1,14 +1,28 @@
 """
-n8n Code Module - Invoice JSON Parser
-
-Copy this entire code into your n8n Code Module (Python).
-This will clean invoice data from nested JSON structures with markdown formatting.
+Test script for n8n invoice parser with actual data structure
 """
 
 import json
 import re
 
-# Process each item in the n8n workflow
+# Simulate the actual input structure from your n8n workflow
+test_input = {
+    "content": [
+        {
+            "type": "text",
+            "text": '```json\n<invoice_data>\n{\n  "invoice": {\n    "invoice_number": "0012415278",\n    "invoice_date": "29/09/25",\n    "customer_account": "WE1573",\n    "pages": [\n      {\n        "page": "1 of 4",\n        "line_items": [\n          {\n            "date": "2025-09-22",\n            "del_adv_number": "0012816646",\n            "description": "A12M-STFCR 11 BORING BAR",\n            "part_no": "PMT1060011P",\n            "qty": "2",\n            "price": "103.790",\n            "unit": "EA",\n            "discount": "0.00",\n            "total_value": "207.58"\n          }\n        ]\n      }\n    ]\n  }\n}\n</invoice_data>\n```'
+        }
+    ]
+}
+
+# Mock the n8n items structure
+class Item:
+    def __init__(self, data):
+        self.json = data
+
+items = [Item(test_input)]
+
+# Execute the n8n code
 for item in items:
     # Get the input data from the item
     input_data = item.json
@@ -48,4 +62,6 @@ for item in items:
     # Update the item with cleaned data
     item.json = cleaned_data
 
-return items
+# Print the result
+print("SUCCESS! Cleaned Invoice Data:")
+print(json.dumps(items[0].json, indent=2))
