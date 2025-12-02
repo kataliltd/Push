@@ -13,24 +13,42 @@ for item in items:
     # Get the input data from the item
     input_data = item.json
 
-    # Extract the text content from the nested structure
-    # Handle both: object with "content" field OR array with objects
+    # Try to find the text content in various possible structures
     text_content = None
 
-    if isinstance(input_data, dict) and "content" in input_data:
-        # Direct object with content field: {"content": [{"text": "..."}]}
-        content_list = input_data["content"]
-        if len(content_list) > 0 and "text" in content_list[0]:
-            text_content = content_list[0]["text"]
-    elif isinstance(input_data, list) and len(input_data) > 0:
-        # Array of objects: [{"content": [{"text": "..."}]}]
-        if "content" in input_data[0]:
-            content_list = input_data[0]["content"]
-            if len(content_list) > 0 and "text" in content_list[0]:
-                text_content = content_list[0]["text"]
+    # Try 1: Direct string (if the input is already just the text)
+    if isinstance(input_data, str):
+        text_content = input_data
 
+    # Try 2: Object with "content" field: {"content": [{"text": "..."}]}
+    elif isinstance(input_data, dict):
+        if "content" in input_data:
+            content_list = input_data["content"]
+            if isinstance(content_list, list) and len(content_list) > 0:
+                if isinstance(content_list[0], dict) and "text" in content_list[0]:
+                    text_content = content_list[0]["text"]
+        # Try 3: Direct "text" field: {"text": "..."}
+        elif "text" in input_data:
+            text_content = input_data["text"]
+
+    # Try 4: Array of objects: [{"content": [{"text": "..."}]}]
+    elif isinstance(input_data, list) and len(input_data) > 0:
+        first_item = input_data[0]
+        if isinstance(first_item, dict):
+            if "content" in first_item:
+                content_list = first_item["content"]
+                if isinstance(content_list, list) and len(content_list) > 0:
+                    if isinstance(content_list[0], dict) and "text" in content_list[0]:
+                        text_content = content_list[0]["text"]
+            elif "text" in first_item:
+                text_content = first_item["text"]
+
+    # If we still don't have text, provide helpful error message
     if text_content is None:
-        raise ValueError("Could not find text content in expected structure")
+        error_msg = f"Could not find text content. Input type: {type(input_data).__name__}"
+        if isinstance(input_data, dict):
+            error_msg += f", Keys: {list(input_data.keys())}"
+        raise ValueError(error_msg)
 
     # Remove markdown code block markers (```json and ```)
     text_content = re.sub(r'^```json\s*', '', text_content)
