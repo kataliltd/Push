@@ -1,15 +1,33 @@
 (() => {
-  // Prevent the content script running twice on the same page (ChatGPT is a SPA)
+  // Prevent duplicate injection
   if (window.__mgpc_bulk_select_injected__) return;
   window.__mgpc_bulk_select_injected__ = true;
 
   const STATE = {
     selected: new Set(),
     deleting: false,
+    deleteEndpoint: null,
   };
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const log = (...args) => console.log("[CGPT Bulk Delete]", ...args);
+
+  // Intercept fetch to learn the delete API endpoint
+  const originalFetch = window.fetch;
+  window.fetch = function(...args) {
+    const [url, options] = args;
+
+    // Look for DELETE requests to conversation endpoints
+    if (options?.method === 'PATCH' && typeof url === 'string' && url.includes('/conversation')) {
+      const body = options.body ? JSON.parse(options.body) : null;
+      if (body?.is_visible === false) {
+        log("Detected delete API call:", url, body);
+        STATE.deleteEndpoint = url.split('/conversations/')[0] + '/conversations/';
+      }
+    }
+
+    return originalFetch.apply(this, args);
+  };
 
   function isChatLink(a) {
     if (!(a instanceof HTMLAnchorElement)) return false;
@@ -18,7 +36,6 @@
   }
 
   function findSidebar() {
-    // Find any conversation link, then walk up to a likely container
     const a =
       document.querySelector("a[href^='/c/']") ||
       document.querySelector("a[href^='/chat/']");
@@ -34,6 +51,11 @@
 
   function getChatAnchors(sidebar) {
     return Array.from(sidebar.querySelectorAll("a")).filter(isChatLink);
+  }
+
+  function extractChatId(href) {
+    const match = href.match(/\/(c|chat)\/([a-f0-9-]+)/);
+    return match ? match[2] : null;
   }
 
   // ---------- UI ----------
@@ -105,7 +127,6 @@
       const href = a.getAttribute("href");
       if (!href) continue;
 
-      // Prevent endless reinjection / DOM churn
       if (a.dataset.cgptBulkProcessed === "1") continue;
       a.dataset.cgptBulkProcessed = "1";
 
@@ -126,10 +147,8 @@
       cb.style.cursor = "pointer";
       cb.style.zIndex = "10";
 
-      // Stop propagation to prevent parent <a> navigation, but allow checkbox to toggle
       cb.addEventListener("click", (e) => {
         e.stopPropagation();
-        // Don't preventDefault - we want the checkbox to toggle naturally
       }, true);
 
       cb.addEventListener("change", (e) => {
@@ -148,219 +167,35 @@
     updateCount(sidebar);
   }
 
-  function selectAll(sidebar) {
-    for (const a of getChatAnchors(sidebar)) {
-      const href = a.getAttribute("href");
-      if (!href) continue;
-      STATE.selected.add(href);
-      const cb = a.querySelector("input.cgpt-bulk-checkbox");
-      if (cb) cb.checked = true;
-    }
-    updateCount(sidebar);
-  }
+  // ---------- API-based deletion ----------
+  async function deleteConversationAPI(chatId) {
+    log(`Deleting chat via API: ${chatId}`);
 
-  function selectNone(sidebar) {
-    STATE.selected.clear();
-    for (const a of getChatAnchors(sidebar)) {
-      const cb = a.querySelector("input.cgpt-bulk-checkbox");
-      if (cb) cb.checked = false;
-    }
-    updateCount(sidebar);
-  }
+    // Try to find the API endpoint
+    const baseUrl = window.location.origin;
+    const apiUrl = `${baseUrl}/backend-api/conversation/${chatId}`;
 
-  // ---------- Delete automation (best effort) ----------
-  function normalizeText(s) {
-    return (s || "").replace(/\s+/g, " ").trim().toLowerCase();
-  }
-
-  function findButtonByText(root, labels) {
-    const want = labels.map(normalizeText);
-    for (const b of Array.from(root.querySelectorAll("button"))) {
-      const t = normalizeText(b.textContent);
-      if (!t) continue;
-      if (want.some((w) => t === w || t.includes(w))) return b;
-    }
-    return null;
-  }
-
-  async function deleteChatByAnchor(anchor) {
-    log("Attempting to delete chat:", anchor.getAttribute("href"));
-
-    anchor.scrollIntoView({ block: "center" });
-    await sleep(400);
-
-    // Try to find a menu button in the row
-    const row = anchor.closest("li") || anchor.parentElement;
-    if (!row) {
-      log("ERROR: Could not find row container");
-      throw new Error("Could not find row container");
-    }
-
-    // Find menu button with multiple strategies
-    let menuBtn =
-      row.querySelector("button[aria-haspopup='menu']") ||
-      row.querySelector("button[data-testid='more-options']") ||
-      Array.from(row.querySelectorAll("button")).find((b) => {
-        const label = (b.getAttribute("aria-label") || "").toLowerCase();
-        return label.includes("more") || label.includes("menu") || label.includes("options");
-      });
-
-    if (!menuBtn) {
-      log("ERROR: Could not find menu button. Row HTML:", row.outerHTML.substring(0, 200));
-      throw new Error("Could not find menu button");
-    }
-
-    log("Clicking menu button");
-
-    // Get button position for realistic event simulation
-    const rect = menuBtn.getBoundingClientRect();
-    const x = rect.left + rect.width / 2;
-    const y = rect.top + rect.height / 2;
-
-    // Simulate realistic mouse interaction: hover → mouseenter → mousedown → mouseup → click
-    const eventOptions = {
-      view: window,
-      bubbles: true,
-      cancelable: true,
-      clientX: x,
-      clientY: y,
-      screenX: x,
-      screenY: y,
-      buttons: 1,
-      button: 0
-    };
-
-    // Step 1: Hover and mouseenter (some menus require this)
-    menuBtn.dispatchEvent(new MouseEvent('mouseover', eventOptions));
-    menuBtn.dispatchEvent(new MouseEvent('mouseenter', eventOptions));
-    await sleep(100);
-
-    // Step 2: Pointer events (modern React often uses these)
-    menuBtn.dispatchEvent(new PointerEvent('pointerover', eventOptions));
-    menuBtn.dispatchEvent(new PointerEvent('pointerenter', eventOptions));
-    menuBtn.dispatchEvent(new PointerEvent('pointerdown', eventOptions));
-    await sleep(50);
-    menuBtn.dispatchEvent(new PointerEvent('pointerup', eventOptions));
-    menuBtn.dispatchEvent(new PointerEvent('click', eventOptions));
-
-    await sleep(800);
-
-    // Check if menu appeared
-    let menuAppeared = document.querySelectorAll('[role="menu"]').length > 0 ||
-                       Array.from(document.querySelectorAll('*')).some(el =>
-                         el.textContent.includes('Share') && el.textContent.includes('Delete')
-                       );
-
-    if (!menuAppeared) {
-      log("Menu didn't appear with pointer events, trying direct click()");
-      menuBtn.click();
-      await sleep(800);
-    }
-
-    // SUPER aggressive debug: Log EVERYTHING visible
-    const allText = Array.from(document.querySelectorAll('*'))
-      .filter(el => {
-        const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0 && el.textContent.trim().length > 0;
-      })
-      .map(el => el.textContent.trim())
-      .filter((text, index, self) => self.indexOf(text) === index) // unique
-      .filter(text => text.length < 50)
-      .sort();
-
-    log("ALL unique visible text on page (first 100):", allText.slice(0, 100));
-
-    // Check if Share, Rename, Delete are in the page at all
-    const hasShare = allText.some(t => t.toLowerCase().includes('share'));
-    const hasRename = allText.some(t => t.toLowerCase().includes('rename'));
-    const hasDelete = allText.some(t => t.toLowerCase().includes('delete'));
-
-    log(`Text found: Share=${hasShare}, Rename=${hasRename}, Delete=${hasDelete}`);
-
-    let deleteBtn = null;
-
-    // Search for delete with case-insensitive approach
-    const allElements = Array.from(document.querySelectorAll('*'));
-
-    for (const el of allElements) {
-      const rect = el.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) continue;
-
-      const text = el.textContent.trim().toLowerCase();
-
-      if (text === 'delete' || (text.includes('delete') && text.length < 30)) {
-        log(`FOUND element with delete: ${el.tagName}.${el.className} text="${el.textContent.trim()}"`);
-        deleteBtn = el;
-        break;
-      }
-    }
-
-    if (!deleteBtn) {
-      log("CRITICAL: Could not find delete. Trying to find the menu itself...");
-
-      // Try to find elements that appeared recently (high z-index, fixed/absolute)
-      const recentlyAppeared = Array.from(document.querySelectorAll('*'))
-        .filter(el => {
-          const rect = el.getBoundingClientRect();
-          const style = window.getComputedStyle(el);
-          const zIndex = parseInt(style.zIndex);
-          return rect.width > 100 &&
-                 (style.position === 'fixed' || style.position === 'absolute') &&
-                 zIndex > 100;
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          is_visible: false
         })
-        .sort((a, b) => parseInt(window.getComputedStyle(b).zIndex) - parseInt(window.getComputedStyle(a).zIndex));
-
-      log(`Found ${recentlyAppeared.length} high-z-index positioned elements`);
-
-      if (recentlyAppeared.length > 0) {
-        for (let i = 0; i < Math.min(3, recentlyAppeared.length); i++) {
-          const el = recentlyAppeared[i];
-          log(`Element #${i}: ${el.tagName} z-index=${window.getComputedStyle(el).zIndex} class="${el.className.substring(0, 50)}" text="${el.textContent.substring(0, 100)}"`);
-        }
-      }
-
-      throw new Error("Could not find Delete option - menu may not have opened");
-    }
-
-    log("Found delete element:", deleteBtn.tagName, deleteBtn.className);
-
-    log("Clicking delete button");
-    deleteBtn.click();
-    await sleep(600);
-
-    // Debug: Log all visible buttons
-    const allButtons = Array.from(document.body.querySelectorAll("button"));
-    const visibleButtons = allButtons.filter(b => {
-      const rect = b.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
-    });
-    log(`Found ${visibleButtons.length} visible buttons after clicking delete`);
-
-    // Find confirmation button
-    const confirm =
-      findButtonByText(document.body, ["Delete", "Confirm"]) ||
-      Array.from(document.body.querySelectorAll("button")).find((b) =>
-        normalizeText(b.textContent) === "delete" || normalizeText(b.textContent) === "confirm"
-      ) ||
-      // Look for red/danger buttons (delete confirmations are usually red)
-      Array.from(document.body.querySelectorAll("button")).find((b) => {
-        const text = normalizeText(b.textContent);
-        const style = window.getComputedStyle(b);
-        const bgColor = style.backgroundColor;
-        return (text.includes("delete") || text.includes("confirm")) &&
-               (bgColor.includes("rgb(220") || bgColor.includes("red"));
       });
 
-    if (!confirm) {
-      log("ERROR: Could not find confirm Delete button. Visible buttons:",
-          visibleButtons.slice(0, 10).map(b => `"${b.textContent.trim()}"`).join(", "));
-      throw new Error("Could not find confirm Delete button");
-    }
+      if (!response.ok) {
+        throw new Error(`API returned ${response.status}: ${response.statusText}`);
+      }
 
-    log("Clicking confirm button:", confirm.textContent.trim());
-    confirm.click();
-    await sleep(800);
-    log("Chat deleted successfully");
+      log(`Successfully deleted chat ${chatId}`);
+      return true;
+    } catch (error) {
+      log(`Failed to delete chat ${chatId}:`, error.message);
+      throw error;
+    }
   }
 
   async function bulkDeleteSelected(sidebar) {
@@ -374,9 +209,20 @@
     try {
       const hrefs = Array.from(STATE.selected);
       const total = hrefs.length;
+      let successCount = 0;
+      let failCount = 0;
 
       for (let i = 0; i < hrefs.length; i++) {
         const href = hrefs[i];
+        const chatId = extractChatId(href);
+
+        if (!chatId) {
+          log(`Could not extract chat ID from ${href}`);
+          failCount++;
+          STATE.selected.delete(href);
+          updateCount(sidebar);
+          continue;
+        }
 
         // Update button to show progress
         if (deleteBtn) {
@@ -384,40 +230,44 @@
           deleteBtn.style.opacity = "0.7";
         }
 
-        // Re-find anchor because list re-renders
-        const a = sidebar.querySelector(`a[href='${CSS.escape(href)}']`);
-        if (!a) {
-          STATE.selected.delete(href);
-          updateCount(sidebar);
-          continue;
-        }
-
         try {
-          await deleteChatByAnchor(a);
+          await deleteConversationAPI(chatId);
+          successCount++;
           STATE.selected.delete(href);
           updateCount(sidebar);
+
+          // Small delay between requests
+          await sleep(300);
         } catch (error) {
           log(`Failed to delete chat ${i + 1}/${total}:`, error.message);
-          // Continue with next deletion even if one fails
+          failCount++;
         }
-
-        await sleep(350);
       }
 
-      // Show success message
+      // Show result message
       if (deleteBtn) {
-        deleteBtn.textContent = "✓ Deleted!";
+        const message = failCount > 0
+          ? `✓ Deleted ${successCount}, ${failCount} failed`
+          : `✓ Deleted ${successCount}!`;
+        deleteBtn.textContent = message;
+
         setTimeout(() => {
           if (deleteBtn) {
-            deleteBtn.textContent = originalText || "Delete selected";
+            deleteBtn.textContent = originalText || "Delete Selected";
             deleteBtn.style.opacity = "1";
           }
-        }, 2000);
+        }, 3000);
+      }
+
+      if (successCount > 0) {
+        log(`Bulk delete complete: ${successCount} deleted, ${failCount} failed`);
+        // Refresh the page to update the sidebar
+        setTimeout(() => window.location.reload(), 1500);
       }
     } finally {
       STATE.deleting = false;
       if (deleteBtn && deleteBtn.textContent.includes("Deleting")) {
-        deleteBtn.textContent = originalText || "Delete selected";
+        deleteBtn.textContent = originalText || "Delete Selected";
         deleteBtn.style.opacity = "1";
       }
     }
@@ -431,7 +281,6 @@
     ensureBulkBar(sidebar);
     ensureCheckboxes(sidebar);
 
-    // Observe ONLY the sidebar, debounced
     let scheduled = false;
     const scheduleUpdate = () => {
       if (scheduled) return;
@@ -448,7 +297,7 @@
     const sidebarObserver = new MutationObserver(scheduleUpdate);
     sidebarObserver.observe(sidebar, { childList: true, subtree: true });
 
-    log("Booted");
+    log("API-based Bulk Delete Active!");
     return true;
   }
 
