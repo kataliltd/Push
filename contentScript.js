@@ -75,9 +75,15 @@
     selectNoneBtn.onclick = () => selectNone(sidebar);
 
     const deleteBtn = mkBtn("Delete selected");
-    deleteBtn.style.borderColor = "rgba(220, 38, 38, 0.35)";
+    deleteBtn.style.borderColor = "rgba(220, 38, 38, 0.5)";
+    deleteBtn.style.color = "rgb(220, 38, 38)";
+    deleteBtn.style.fontWeight = "600";
     deleteBtn.onclick = async () => {
       if (STATE.deleting) return;
+      if (STATE.selected.size === 0) {
+        alert("Please select at least one chat to delete.");
+        return;
+      }
       const ok = confirm(
         `Delete ${STATE.selected.size} selected chat(s)? This cannot be undone.`
       );
@@ -229,11 +235,22 @@
     if (STATE.selected.size === 0) return;
     STATE.deleting = true;
 
+    const bar = sidebar.querySelector("#cgpt-bulkbar");
+    const deleteBtn = bar?.querySelector("button:nth-child(3)");
+    const originalText = deleteBtn?.textContent;
+
     try {
       const hrefs = Array.from(STATE.selected);
+      const total = hrefs.length;
 
       for (let i = 0; i < hrefs.length; i++) {
         const href = hrefs[i];
+
+        // Update button to show progress
+        if (deleteBtn) {
+          deleteBtn.textContent = `Deleting ${i + 1}/${total}...`;
+          deleteBtn.style.opacity = "0.7";
+        }
 
         // Re-find anchor because list re-renders
         const a = sidebar.querySelector(`a[href='${CSS.escape(href)}']`);
@@ -243,14 +260,34 @@
           continue;
         }
 
-        await deleteChatByAnchor(a);
-        STATE.selected.delete(href);
-        updateCount(sidebar);
+        try {
+          await deleteChatByAnchor(a);
+          STATE.selected.delete(href);
+          updateCount(sidebar);
+        } catch (error) {
+          log(`Failed to delete chat ${i + 1}/${total}:`, error.message);
+          // Continue with next deletion even if one fails
+        }
 
         await sleep(350);
       }
+
+      // Show success message
+      if (deleteBtn) {
+        deleteBtn.textContent = "✓ Deleted!";
+        setTimeout(() => {
+          if (deleteBtn) {
+            deleteBtn.textContent = originalText || "Delete selected";
+            deleteBtn.style.opacity = "1";
+          }
+        }, 2000);
+      }
     } finally {
       STATE.deleting = false;
+      if (deleteBtn && deleteBtn.textContent.includes("Deleting")) {
+        deleteBtn.textContent = originalText || "Delete selected";
+        deleteBtn.style.opacity = "1";
+      }
     }
   }
 
