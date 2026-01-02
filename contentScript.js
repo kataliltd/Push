@@ -211,8 +211,32 @@
     }
 
     log("Clicking menu button");
-    menuBtn.click();
-    await sleep(1500); // Even longer wait
+
+    // Try multiple click methods to ensure menu opens
+    // Method 1: Native mouse events
+    const clickEvent = new MouseEvent('click', {
+      view: window,
+      bubbles: true,
+      cancelable: true,
+      buttons: 1
+    });
+    menuBtn.dispatchEvent(clickEvent);
+
+    await sleep(800);
+
+    // Check if menu appeared, if not try again with different method
+    let menuAppeared = document.querySelectorAll('[role="menu"]').length > 0 ||
+                       Array.from(document.querySelectorAll('*')).some(el =>
+                         el.textContent.includes('Share') && el.textContent.includes('Delete')
+                       );
+
+    if (!menuAppeared) {
+      log("Menu didn't appear, trying mousedown + mouseup");
+      menuBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      await sleep(50);
+      menuBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      await sleep(800);
+    }
 
     // SUPER aggressive debug: Log EVERYTHING visible
     const allText = Array.from(document.querySelectorAll('*'))
@@ -276,7 +300,7 @@
         }
       }
 
-      throw new Error("Could not find Delete option");
+      throw new Error("Could not find Delete option - menu may not have opened");
     }
 
     log("Found delete element:", deleteBtn.tagName, deleteBtn.className);
