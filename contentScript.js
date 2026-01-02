@@ -212,29 +212,48 @@
 
     log("Clicking menu button");
 
-    // Try multiple click methods to ensure menu opens
-    // Method 1: Native mouse events
-    const clickEvent = new MouseEvent('click', {
+    // Get button position for realistic event simulation
+    const rect = menuBtn.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+
+    // Simulate realistic mouse interaction: hover → mouseenter → mousedown → mouseup → click
+    const eventOptions = {
       view: window,
       bubbles: true,
       cancelable: true,
-      buttons: 1
-    });
-    menuBtn.dispatchEvent(clickEvent);
+      clientX: x,
+      clientY: y,
+      screenX: x,
+      screenY: y,
+      buttons: 1,
+      button: 0
+    };
+
+    // Step 1: Hover and mouseenter (some menus require this)
+    menuBtn.dispatchEvent(new MouseEvent('mouseover', eventOptions));
+    menuBtn.dispatchEvent(new MouseEvent('mouseenter', eventOptions));
+    await sleep(100);
+
+    // Step 2: Pointer events (modern React often uses these)
+    menuBtn.dispatchEvent(new PointerEvent('pointerover', eventOptions));
+    menuBtn.dispatchEvent(new PointerEvent('pointerenter', eventOptions));
+    menuBtn.dispatchEvent(new PointerEvent('pointerdown', eventOptions));
+    await sleep(50);
+    menuBtn.dispatchEvent(new PointerEvent('pointerup', eventOptions));
+    menuBtn.dispatchEvent(new PointerEvent('click', eventOptions));
 
     await sleep(800);
 
-    // Check if menu appeared, if not try again with different method
+    // Check if menu appeared
     let menuAppeared = document.querySelectorAll('[role="menu"]').length > 0 ||
                        Array.from(document.querySelectorAll('*')).some(el =>
                          el.textContent.includes('Share') && el.textContent.includes('Delete')
                        );
 
     if (!menuAppeared) {
-      log("Menu didn't appear, trying mousedown + mouseup");
-      menuBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-      await sleep(50);
-      menuBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      log("Menu didn't appear with pointer events, trying direct click()");
+      menuBtn.click();
       await sleep(800);
     }
 
