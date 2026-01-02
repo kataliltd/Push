@@ -212,90 +212,79 @@
 
     log("Clicking menu button");
     menuBtn.click();
-    await sleep(800);
+    await sleep(1000); // Give menu more time to render
 
-    // Get ALL text content on page to see what appeared
-    const allVisibleText = Array.from(document.body.querySelectorAll("*"))
+    // Find the menu container (floating popover)
+    const menuContainers = Array.from(document.querySelectorAll('div'))
       .filter(el => {
         const rect = el.getBoundingClientRect();
         const style = window.getComputedStyle(el);
-        return rect.width > 0 && rect.height > 0 &&
-               style.display !== 'none' &&
-               style.visibility !== 'hidden' &&
-               el.children.length === 0 && // leaf nodes only
-               el.textContent.trim().length > 0;
+        return rect.width > 100 && rect.width < 400 &&
+               rect.height > 100 && rect.height < 600 &&
+               (style.position === 'fixed' || style.position === 'absolute') &&
+               parseInt(style.zIndex) > 50;
       })
-      .map(el => el.textContent.trim())
-      .filter(text => text.length > 0 && text.length < 50);
+      .sort((a, b) => parseInt(window.getComputedStyle(b).zIndex) - parseInt(window.getComputedStyle(a).zIndex));
 
-    log("All visible text after menu click:", allVisibleText.slice(0, 50));
+    log(`Found ${menuContainers.length} potential menu containers`);
 
-    // Find the menu that just appeared - look for elements with z-index
-    const highZIndexElements = Array.from(document.body.querySelectorAll("*"))
-      .filter(el => {
-        const style = window.getComputedStyle(el);
-        const zIndex = parseInt(style.zIndex);
-        return zIndex > 100 && el.getBoundingClientRect().width > 0;
-      })
-      .sort((a, b) => {
-        const aZ = parseInt(window.getComputedStyle(a).zIndex);
-        const bZ = parseInt(window.getComputedStyle(b).zIndex);
-        return bZ - aZ;
-      });
-
-    log(`Found ${highZIndexElements.length} high z-index elements (likely menus)`);
-
-    if (highZIndexElements.length > 0) {
-      const topMenu = highZIndexElements[0];
-      log("Top menu element:", topMenu.tagName, topMenu.className);
-      log("Menu HTML:", topMenu.outerHTML.substring(0, 500));
-      log("Menu text content:", topMenu.textContent.trim());
-    }
-
-    // Try to find delete option with maximum flexibility
     let deleteBtn = null;
 
-    // Strategy 1: Look for common delete-related words
-    const deleteKeywords = ['delete', 'remove', 'trash', 'archive', 'bin'];
+    // Search within each menu container
+    for (let i = 0; i < Math.min(menuContainers.length, 3); i++) {
+      const menu = menuContainers[i];
+      log(`Examining menu #${i}: ${menu.className}`);
+      log(`Menu text content: "${menu.textContent.substring(0, 150)}"`);
 
-    for (const keyword of deleteKeywords) {
-      const elements = Array.from(document.body.querySelectorAll("*")).filter(el => {
+      // Look for "Delete" text - try different selectors
+      const candidates = [
+        ...Array.from(menu.querySelectorAll('div')),
+        ...Array.from(menu.querySelectorAll('button')),
+        ...Array.from(menu.querySelectorAll('a')),
+        ...Array.from(menu.querySelectorAll('[role="menuitem"]'))
+      ];
+
+      for (const el of candidates) {
+        const text = el.textContent.trim();
+        const normalText = normalizeText(text);
+
+        // Check if this is the delete option
+        if ((normalText === 'delete' || text === 'Delete') && text.length < 15) {
+          log(`Found DELETE element: ${el.tagName}.${el.className} text="${text}"`);
+          deleteBtn = el;
+          break;
+        }
+      }
+
+      if (deleteBtn) break;
+    }
+
+    // Fallback: search entire page for any element with exactly "Delete"
+    if (!deleteBtn) {
+      log("Menu search failed, searching entire page...");
+
+      const allDivs = Array.from(document.querySelectorAll('div, button, a, span'));
+      for (const el of allDivs) {
         const rect = el.getBoundingClientRect();
-        return rect.width > 20 && rect.height > 10 &&
-               normalizeText(el.textContent).includes(keyword);
-      });
+        if (rect.width === 0 || rect.height === 0) continue;
 
-      if (elements.length > 0) {
-        log(`Found ${elements.length} elements with "${keyword}":`,
-            elements.slice(0, 5).map(el => `${el.tagName}.${el.className} "${el.textContent.trim().substring(0, 30)}"`));
+        const text = el.textContent.trim();
 
-        deleteBtn = elements.find(el =>
-          el.tagName === 'BUTTON' || el.tagName === 'A' ||
-          el.getAttribute('role') === 'menuitem' || el.onclick
-        ) || elements[0];
-
-        if (deleteBtn) {
-          log(`Using element with "${keyword}" as delete button`);
+        // Must be exactly "Delete" or very close
+        if (text === 'Delete' && text.length < 15) {
+          log(`Found potential delete element: ${el.tagName}.${el.className}`);
+          deleteBtn = el;
           break;
         }
       }
     }
 
-    // Strategy 2: Classic selectors
     if (!deleteBtn) {
-      deleteBtn =
-        findButtonByText(document.body, ["Delete", "Delete chat", "Remove"]) ||
-        Array.from(document.body.querySelectorAll("[role='menuitem']")).find(el =>
-          normalizeText(el.textContent).includes("delete")
-        );
-    }
-
-    if (!deleteBtn) {
-      log("ERROR: Could not find Delete option after trying all strategies");
+      log("ERROR: Could not find Delete option in menu");
       throw new Error("Could not find Delete option");
     }
 
-    log("Found delete button:", deleteBtn.tagName, deleteBtn.className, `"${deleteBtn.textContent.trim()}"`);
+    log("Found delete element:", deleteBtn.tagName, deleteBtn.className, `text="${deleteBtn.textContent.trim()}"`);
 
     log("Clicking delete button");
     deleteBtn.click();
