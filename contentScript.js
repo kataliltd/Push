@@ -212,79 +212,61 @@
 
     log("Clicking menu button");
     menuBtn.click();
-    await sleep(1000); // Give menu more time to render
+    await sleep(1200); // Give menu time to fully render and animate
 
-    // Find the menu container (floating popover)
-    const menuContainers = Array.from(document.querySelectorAll('div'))
-      .filter(el => {
-        const rect = el.getBoundingClientRect();
-        const style = window.getComputedStyle(el);
-        return rect.width > 100 && rect.width < 400 &&
-               rect.height > 100 && rect.height < 600 &&
-               (style.position === 'fixed' || style.position === 'absolute') &&
-               parseInt(style.zIndex) > 50;
-      })
-      .sort((a, b) => parseInt(window.getComputedStyle(b).zIndex) - parseInt(window.getComputedStyle(a).zIndex));
-
-    log(`Found ${menuContainers.length} potential menu containers`);
-
+    // Aggressive search: Find ANY element with "Delete" text that's visible
     let deleteBtn = null;
 
-    // Search within each menu container
-    for (let i = 0; i < Math.min(menuContainers.length, 3); i++) {
-      const menu = menuContainers[i];
-      log(`Examining menu #${i}: ${menu.className}`);
-      log(`Menu text content: "${menu.textContent.substring(0, 150)}"`);
+    // Get all elements on the page
+    const allElements = Array.from(document.querySelectorAll('*'));
 
-      // Look for "Delete" text - try different selectors
-      const candidates = [
-        ...Array.from(menu.querySelectorAll('div')),
-        ...Array.from(menu.querySelectorAll('button')),
-        ...Array.from(menu.querySelectorAll('a')),
-        ...Array.from(menu.querySelectorAll('[role="menuitem"]'))
-      ];
+    log(`Searching ${allElements.length} elements for "Delete" text...`);
 
-      for (const el of candidates) {
-        const text = el.textContent.trim();
-        const normalText = normalizeText(text);
+    // Filter to only visible, clickable elements
+    const visibleElements = allElements.filter(el => {
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 &&
+             style.display !== 'none' &&
+             style.visibility !== 'hidden' &&
+             style.opacity !== '0';
+    });
 
-        // Check if this is the delete option
-        if ((normalText === 'delete' || text === 'Delete') && text.length < 15) {
-          log(`Found DELETE element: ${el.tagName}.${el.className} text="${text}"`);
-          deleteBtn = el;
-          break;
-        }
-      }
+    log(`Found ${visibleElements.length} visible elements`);
 
-      if (deleteBtn) break;
-    }
+    // Look for "Delete" text
+    const deleteElements = visibleElements.filter(el => {
+      const text = el.textContent.trim();
+      // Must have "Delete" as the primary text (not buried in a large paragraph)
+      return text === 'Delete' ||
+             (text.toLowerCase().includes('delete') && text.length < 30);
+    });
 
-    // Fallback: search entire page for any element with exactly "Delete"
-    if (!deleteBtn) {
-      log("Menu search failed, searching entire page...");
+    log(`Found ${deleteElements.length} elements with "delete" text:`,
+        deleteElements.slice(0, 10).map(el =>
+          `${el.tagName}.${el.className.substring(0, 30)} "${el.textContent.trim().substring(0, 20)}"`
+        ));
 
-      const allDivs = Array.from(document.querySelectorAll('div, button, a, span'));
-      for (const el of allDivs) {
+    if (deleteElements.length > 0) {
+      // Prefer elements that are likely to be menu items
+      deleteBtn = deleteElements.find(el => {
         const rect = el.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) continue;
-
-        const text = el.textContent.trim();
-
-        // Must be exactly "Delete" or very close
-        if (text === 'Delete' && text.length < 15) {
-          log(`Found potential delete element: ${el.tagName}.${el.className}`);
-          deleteBtn = el;
-          break;
-        }
-      }
+        // Look for reasonable menu item size
+        return rect.width > 50 && rect.width < 300 &&
+               rect.height > 15 && rect.height < 60;
+      }) || deleteElements[0]; // Fallback to first match
     }
 
     if (!deleteBtn) {
-      log("ERROR: Could not find Delete option in menu");
+      log("ERROR: Could not find Delete option. Visible elements with 'Share':",
+          visibleElements.filter(el => el.textContent.trim() === 'Share')
+            .map(el => `${el.tagName}.${el.className}`));
       throw new Error("Could not find Delete option");
     }
 
-    log("Found delete element:", deleteBtn.tagName, deleteBtn.className, `text="${deleteBtn.textContent.trim()}"`);
+    log("Found delete element:", deleteBtn.tagName, deleteBtn.className,
+        `text="${deleteBtn.textContent.trim()}"`,
+        `size=${Math.round(deleteBtn.getBoundingClientRect().width)}x${Math.round(deleteBtn.getBoundingClientRect().height)}`);
 
     log("Clicking delete button");
     deleteBtn.click();
