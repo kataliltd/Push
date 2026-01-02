@@ -212,49 +212,73 @@
 
     log("Clicking menu button");
     menuBtn.click();
-    await sleep(700);
+    await sleep(800);
 
-    // Debug: Discover what menu structure ChatGPT is using
-    const possibleMenus = [
-      ...Array.from(document.body.querySelectorAll("[role='menu']")),
-      ...Array.from(document.body.querySelectorAll("[role='dialog']")),
-      ...Array.from(document.body.querySelectorAll("div[data-radix-popper-content-wrapper]")),
-      ...Array.from(document.body.querySelectorAll("div[data-headlessui-state='open']")),
-      ...Array.from(document.body.querySelectorAll("[class*='menu']")),
-      ...Array.from(document.body.querySelectorAll("[class*='popover']")),
-      ...Array.from(document.body.querySelectorAll("[class*='dropdown']"))
-    ];
+    // Get ALL text content on page to see what appeared
+    const allVisibleText = Array.from(document.body.querySelectorAll("*"))
+      .filter(el => {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0 &&
+               style.display !== 'none' &&
+               style.visibility !== 'hidden' &&
+               el.children.length === 0 && // leaf nodes only
+               el.textContent.trim().length > 0;
+      })
+      .map(el => el.textContent.trim())
+      .filter(text => text.length > 0 && text.length < 50);
 
-    log(`Found ${possibleMenus.length} potential menu containers`);
+    log("All visible text after menu click:", allVisibleText.slice(0, 50));
 
-    // Find recently visible elements (appeared in last second)
-    const recentElements = Array.from(document.body.querySelectorAll("*")).filter(el => {
-      const rect = el.getBoundingClientRect();
-      return rect.width > 50 && rect.height > 20 &&
-             window.getComputedStyle(el).position !== 'static' &&
-             el.textContent.length > 0 && el.textContent.length < 100;
-    });
+    // Find the menu that just appeared - look for elements with z-index
+    const highZIndexElements = Array.from(document.body.querySelectorAll("*"))
+      .filter(el => {
+        const style = window.getComputedStyle(el);
+        const zIndex = parseInt(style.zIndex);
+        return zIndex > 100 && el.getBoundingClientRect().width > 0;
+      })
+      .sort((a, b) => {
+        const aZ = parseInt(window.getComputedStyle(a).zIndex);
+        const bZ = parseInt(window.getComputedStyle(b).zIndex);
+        return bZ - aZ;
+      });
 
-    log(`Potential menu items (by visibility):`, recentElements.slice(0, 20).map(el =>
-      `${el.tagName} "${el.textContent.trim().substring(0, 30)}"`
-    ));
+    log(`Found ${highZIndexElements.length} high z-index elements (likely menus)`);
+
+    if (highZIndexElements.length > 0) {
+      const topMenu = highZIndexElements[0];
+      log("Top menu element:", topMenu.tagName, topMenu.className);
+      log("Menu HTML:", topMenu.outerHTML.substring(0, 500));
+      log("Menu text content:", topMenu.textContent.trim());
+    }
 
     // Try to find delete option with maximum flexibility
     let deleteBtn = null;
 
-    // Strategy 1: Look for any element with "delete" text that became visible
-    const deleteElements = recentElements.filter(el =>
-      normalizeText(el.textContent).includes("delete")
-    );
+    // Strategy 1: Look for common delete-related words
+    const deleteKeywords = ['delete', 'remove', 'trash', 'archive', 'bin'];
 
-    log(`Found ${deleteElements.length} elements containing "delete":`,
-        deleteElements.map(el => `${el.tagName}.${el.className} "${el.textContent.trim()}"`));
+    for (const keyword of deleteKeywords) {
+      const elements = Array.from(document.body.querySelectorAll("*")).filter(el => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 20 && rect.height > 10 &&
+               normalizeText(el.textContent).includes(keyword);
+      });
 
-    if (deleteElements.length > 0) {
-      // Prefer clickable elements (a, button, or elements with click handlers)
-      deleteBtn = deleteElements.find(el =>
-        el.tagName === 'BUTTON' || el.tagName === 'A' || el.onclick || el.getAttribute('role') === 'menuitem'
-      ) || deleteElements[0];
+      if (elements.length > 0) {
+        log(`Found ${elements.length} elements with "${keyword}":`,
+            elements.slice(0, 5).map(el => `${el.tagName}.${el.className} "${el.textContent.trim().substring(0, 30)}"`));
+
+        deleteBtn = elements.find(el =>
+          el.tagName === 'BUTTON' || el.tagName === 'A' ||
+          el.getAttribute('role') === 'menuitem' || el.onclick
+        ) || elements[0];
+
+        if (deleteBtn) {
+          log(`Using element with "${keyword}" as delete button`);
+          break;
+        }
+      }
     }
 
     // Strategy 2: Classic selectors
