@@ -212,61 +212,74 @@
 
     log("Clicking menu button");
     menuBtn.click();
-    await sleep(1200); // Give menu time to fully render and animate
+    await sleep(1500); // Even longer wait
 
-    // Aggressive search: Find ANY element with "Delete" text that's visible
+    // SUPER aggressive debug: Log EVERYTHING visible
+    const allText = Array.from(document.querySelectorAll('*'))
+      .filter(el => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && el.textContent.trim().length > 0;
+      })
+      .map(el => el.textContent.trim())
+      .filter((text, index, self) => self.indexOf(text) === index) // unique
+      .filter(text => text.length < 50)
+      .sort();
+
+    log("ALL unique visible text on page (first 100):", allText.slice(0, 100));
+
+    // Check if Share, Rename, Delete are in the page at all
+    const hasShare = allText.some(t => t.toLowerCase().includes('share'));
+    const hasRename = allText.some(t => t.toLowerCase().includes('rename'));
+    const hasDelete = allText.some(t => t.toLowerCase().includes('delete'));
+
+    log(`Text found: Share=${hasShare}, Rename=${hasRename}, Delete=${hasDelete}`);
+
     let deleteBtn = null;
 
-    // Get all elements on the page
+    // Search for delete with case-insensitive approach
     const allElements = Array.from(document.querySelectorAll('*'));
 
-    log(`Searching ${allElements.length} elements for "Delete" text...`);
-
-    // Filter to only visible, clickable elements
-    const visibleElements = allElements.filter(el => {
+    for (const el of allElements) {
       const rect = el.getBoundingClientRect();
-      const style = window.getComputedStyle(el);
-      return rect.width > 0 && rect.height > 0 &&
-             style.display !== 'none' &&
-             style.visibility !== 'hidden' &&
-             style.opacity !== '0';
-    });
+      if (rect.width === 0 || rect.height === 0) continue;
 
-    log(`Found ${visibleElements.length} visible elements`);
+      const text = el.textContent.trim().toLowerCase();
 
-    // Look for "Delete" text
-    const deleteElements = visibleElements.filter(el => {
-      const text = el.textContent.trim();
-      // Must have "Delete" as the primary text (not buried in a large paragraph)
-      return text === 'Delete' ||
-             (text.toLowerCase().includes('delete') && text.length < 30);
-    });
-
-    log(`Found ${deleteElements.length} elements with "delete" text:`,
-        deleteElements.slice(0, 10).map(el =>
-          `${el.tagName}.${el.className.substring(0, 30)} "${el.textContent.trim().substring(0, 20)}"`
-        ));
-
-    if (deleteElements.length > 0) {
-      // Prefer elements that are likely to be menu items
-      deleteBtn = deleteElements.find(el => {
-        const rect = el.getBoundingClientRect();
-        // Look for reasonable menu item size
-        return rect.width > 50 && rect.width < 300 &&
-               rect.height > 15 && rect.height < 60;
-      }) || deleteElements[0]; // Fallback to first match
+      if (text === 'delete' || (text.includes('delete') && text.length < 30)) {
+        log(`FOUND element with delete: ${el.tagName}.${el.className} text="${el.textContent.trim()}"`);
+        deleteBtn = el;
+        break;
+      }
     }
 
     if (!deleteBtn) {
-      log("ERROR: Could not find Delete option. Visible elements with 'Share':",
-          visibleElements.filter(el => el.textContent.trim() === 'Share')
-            .map(el => `${el.tagName}.${el.className}`));
+      log("CRITICAL: Could not find delete. Trying to find the menu itself...");
+
+      // Try to find elements that appeared recently (high z-index, fixed/absolute)
+      const recentlyAppeared = Array.from(document.querySelectorAll('*'))
+        .filter(el => {
+          const rect = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          const zIndex = parseInt(style.zIndex);
+          return rect.width > 100 &&
+                 (style.position === 'fixed' || style.position === 'absolute') &&
+                 zIndex > 100;
+        })
+        .sort((a, b) => parseInt(window.getComputedStyle(b).zIndex) - parseInt(window.getComputedStyle(a).zIndex));
+
+      log(`Found ${recentlyAppeared.length} high-z-index positioned elements`);
+
+      if (recentlyAppeared.length > 0) {
+        for (let i = 0; i < Math.min(3, recentlyAppeared.length); i++) {
+          const el = recentlyAppeared[i];
+          log(`Element #${i}: ${el.tagName} z-index=${window.getComputedStyle(el).zIndex} class="${el.className.substring(0, 50)}" text="${el.textContent.substring(0, 100)}"`);
+        }
+      }
+
       throw new Error("Could not find Delete option");
     }
 
-    log("Found delete element:", deleteBtn.tagName, deleteBtn.className,
-        `text="${deleteBtn.textContent.trim()}"`,
-        `size=${Math.round(deleteBtn.getBoundingClientRect().width)}x${Math.round(deleteBtn.getBoundingClientRect().height)}`);
+    log("Found delete element:", deleteBtn.tagName, deleteBtn.className);
 
     log("Clicking delete button");
     deleteBtn.click();
