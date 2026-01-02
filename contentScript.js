@@ -212,35 +212,66 @@
 
     log("Clicking menu button");
     menuBtn.click();
-    await sleep(600);
+    await sleep(700);
 
-    // Debug: Log all available menu items
-    const allMenuItems = Array.from(document.body.querySelectorAll("[role='menuitem']"));
-    log(`Found ${allMenuItems.length} menu items:`, allMenuItems.map(el => el.textContent.trim()));
+    // Debug: Discover what menu structure ChatGPT is using
+    const possibleMenus = [
+      ...Array.from(document.body.querySelectorAll("[role='menu']")),
+      ...Array.from(document.body.querySelectorAll("[role='dialog']")),
+      ...Array.from(document.body.querySelectorAll("div[data-radix-popper-content-wrapper]")),
+      ...Array.from(document.body.querySelectorAll("div[data-headlessui-state='open']")),
+      ...Array.from(document.body.querySelectorAll("[class*='menu']")),
+      ...Array.from(document.body.querySelectorAll("[class*='popover']")),
+      ...Array.from(document.body.querySelectorAll("[class*='dropdown']"))
+    ];
 
-    // Find delete option with multiple strategies
-    let deleteBtn =
-      findButtonByText(document.body, ["Delete", "Delete chat", "Remove"]) ||
-      Array.from(document.body.querySelectorAll("[role='menuitem']")).find((el) =>
-        normalizeText(el.textContent).includes("delete")
-      ) ||
-      Array.from(document.body.querySelectorAll("div[role='menuitem']")).find((el) =>
-        normalizeText(el.textContent).includes("delete")
-      ) ||
-      // Try finding by span or div containing delete text
-      Array.from(document.body.querySelectorAll("[role='menuitem'] span, [role='menuitem'] div")).find((el) =>
-        normalizeText(el.textContent).includes("delete")
-      )?.closest("[role='menuitem']") ||
-      // Try finding any clickable element with delete text in open menus
-      Array.from(document.body.querySelectorAll("[role='menu'] *")).find((el) =>
-        normalizeText(el.textContent) === "delete" || normalizeText(el.textContent) === "delete chat"
-      );
+    log(`Found ${possibleMenus.length} potential menu containers`);
+
+    // Find recently visible elements (appeared in last second)
+    const recentElements = Array.from(document.body.querySelectorAll("*")).filter(el => {
+      const rect = el.getBoundingClientRect();
+      return rect.width > 50 && rect.height > 20 &&
+             window.getComputedStyle(el).position !== 'static' &&
+             el.textContent.length > 0 && el.textContent.length < 100;
+    });
+
+    log(`Potential menu items (by visibility):`, recentElements.slice(0, 20).map(el =>
+      `${el.tagName} "${el.textContent.trim().substring(0, 30)}"`
+    ));
+
+    // Try to find delete option with maximum flexibility
+    let deleteBtn = null;
+
+    // Strategy 1: Look for any element with "delete" text that became visible
+    const deleteElements = recentElements.filter(el =>
+      normalizeText(el.textContent).includes("delete")
+    );
+
+    log(`Found ${deleteElements.length} elements containing "delete":`,
+        deleteElements.map(el => `${el.tagName}.${el.className} "${el.textContent.trim()}"`));
+
+    if (deleteElements.length > 0) {
+      // Prefer clickable elements (a, button, or elements with click handlers)
+      deleteBtn = deleteElements.find(el =>
+        el.tagName === 'BUTTON' || el.tagName === 'A' || el.onclick || el.getAttribute('role') === 'menuitem'
+      ) || deleteElements[0];
+    }
+
+    // Strategy 2: Classic selectors
+    if (!deleteBtn) {
+      deleteBtn =
+        findButtonByText(document.body, ["Delete", "Delete chat", "Remove"]) ||
+        Array.from(document.body.querySelectorAll("[role='menuitem']")).find(el =>
+          normalizeText(el.textContent).includes("delete")
+        );
+    }
 
     if (!deleteBtn) {
-      log("ERROR: Could not find Delete option. Available menu items:",
-          allMenuItems.map(el => `"${el.textContent.trim()}"`).join(", "));
+      log("ERROR: Could not find Delete option after trying all strategies");
       throw new Error("Could not find Delete option");
     }
+
+    log("Found delete button:", deleteBtn.tagName, deleteBtn.className, `"${deleteBtn.textContent.trim()}"`);
 
     log("Clicking delete button");
     deleteBtn.click();
