@@ -56,27 +56,15 @@
     bar.style.fontFamily =
       "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial";
 
-    const mkBtn = (label) => {
-      const b = document.createElement("button");
-      b.textContent = label;
-      b.style.border = "1px solid rgba(0,0,0,0.12)";
-      b.style.background = "white";
-      b.style.borderRadius = "10px";
-      b.style.padding = "6px 10px";
-      b.style.cursor = "pointer";
-      b.style.fontSize = "12px";
-      return b;
-    };
-
-    const selectAllBtn = mkBtn("Select all");
-    selectAllBtn.onclick = () => selectAll(sidebar);
-
-    const selectNoneBtn = mkBtn("Select none");
-    selectNoneBtn.onclick = () => selectNone(sidebar);
-
-    const deleteBtn = mkBtn("Delete selected");
-    deleteBtn.style.borderColor = "rgba(220, 38, 38, 0.5)";
-    deleteBtn.style.color = "rgb(220, 38, 38)";
+    const deleteBtn = document.createElement("button");
+    deleteBtn.textContent = "Delete Selected";
+    deleteBtn.style.border = "none";
+    deleteBtn.style.background = "rgb(220, 38, 38)";
+    deleteBtn.style.color = "white";
+    deleteBtn.style.borderRadius = "10px";
+    deleteBtn.style.padding = "8px 16px";
+    deleteBtn.style.cursor = "pointer";
+    deleteBtn.style.fontSize = "13px";
     deleteBtn.style.fontWeight = "600";
     deleteBtn.onclick = async () => {
       if (STATE.deleting) return;
@@ -94,11 +82,12 @@
     const count = document.createElement("div");
     count.className = "count";
     count.style.marginLeft = "auto";
-    count.style.fontSize = "12px";
-    count.style.opacity = "0.8";
+    count.style.fontSize = "13px";
+    count.style.fontWeight = "500";
+    count.style.opacity = "0.9";
     count.textContent = "0 selected";
 
-    bar.append(selectAllBtn, selectNoneBtn, deleteBtn, count);
+    bar.append(deleteBtn, count);
     sidebar.prepend(bar);
   }
 
@@ -195,40 +184,71 @@
   }
 
   async function deleteChatByAnchor(anchor) {
+    log("Attempting to delete chat:", anchor.getAttribute("href"));
+
     anchor.scrollIntoView({ block: "center" });
-    await sleep(250);
+    await sleep(400);
 
     // Try to find a menu button in the row
     const row = anchor.closest("li") || anchor.parentElement;
-    if (!row) throw new Error("Could not find row container");
+    if (!row) {
+      log("ERROR: Could not find row container");
+      throw new Error("Could not find row container");
+    }
 
-    const menuBtn =
+    // Find menu button with multiple strategies
+    let menuBtn =
       row.querySelector("button[aria-haspopup='menu']") ||
-      Array.from(row.querySelectorAll("button")).find((b) =>
-        (b.getAttribute("aria-label") || "").toLowerCase().includes("more")
-      );
+      row.querySelector("button[data-testid='more-options']") ||
+      Array.from(row.querySelectorAll("button")).find((b) => {
+        const label = (b.getAttribute("aria-label") || "").toLowerCase();
+        return label.includes("more") || label.includes("menu") || label.includes("options");
+      });
 
-    if (!menuBtn) throw new Error("Could not find menu button");
+    if (!menuBtn) {
+      log("ERROR: Could not find menu button. Row HTML:", row.outerHTML.substring(0, 200));
+      throw new Error("Could not find menu button");
+    }
 
+    log("Clicking menu button");
     menuBtn.click();
-    await sleep(250);
+    await sleep(500);
 
+    // Find delete option with multiple strategies
     const deleteBtn =
       findButtonByText(document.body, ["Delete", "Delete chat", "Remove"]) ||
       Array.from(document.body.querySelectorAll("[role='menuitem']")).find((el) =>
         normalizeText(el.textContent).includes("delete")
+      ) ||
+      Array.from(document.body.querySelectorAll("div[role='menuitem']")).find((el) =>
+        normalizeText(el.textContent).includes("delete")
       );
 
-    if (!deleteBtn) throw new Error("Could not find Delete option");
+    if (!deleteBtn) {
+      log("ERROR: Could not find Delete option");
+      throw new Error("Could not find Delete option");
+    }
 
+    log("Clicking delete button");
     deleteBtn.click();
-    await sleep(250);
-
-    const confirm = findButtonByText(document.body, ["Delete", "Confirm"]);
-    if (!confirm) throw new Error("Could not find confirm Delete button");
-
-    confirm.click();
     await sleep(500);
+
+    // Find confirmation button
+    const confirm =
+      findButtonByText(document.body, ["Delete", "Confirm"]) ||
+      Array.from(document.body.querySelectorAll("button")).find((b) =>
+        normalizeText(b.textContent) === "delete"
+      );
+
+    if (!confirm) {
+      log("ERROR: Could not find confirm Delete button");
+      throw new Error("Could not find confirm Delete button");
+    }
+
+    log("Clicking confirm button");
+    confirm.click();
+    await sleep(700);
+    log("Chat deleted successfully");
   }
 
   async function bulkDeleteSelected(sidebar) {
@@ -236,7 +256,7 @@
     STATE.deleting = true;
 
     const bar = sidebar.querySelector("#cgpt-bulkbar");
-    const deleteBtn = bar?.querySelector("button:nth-child(3)");
+    const deleteBtn = bar?.querySelector("button");
     const originalText = deleteBtn?.textContent;
 
     try {
