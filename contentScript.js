@@ -212,42 +212,72 @@
 
     log("Clicking menu button");
     menuBtn.click();
-    await sleep(500);
+    await sleep(600);
+
+    // Debug: Log all available menu items
+    const allMenuItems = Array.from(document.body.querySelectorAll("[role='menuitem']"));
+    log(`Found ${allMenuItems.length} menu items:`, allMenuItems.map(el => el.textContent.trim()));
 
     // Find delete option with multiple strategies
-    const deleteBtn =
+    let deleteBtn =
       findButtonByText(document.body, ["Delete", "Delete chat", "Remove"]) ||
       Array.from(document.body.querySelectorAll("[role='menuitem']")).find((el) =>
         normalizeText(el.textContent).includes("delete")
       ) ||
       Array.from(document.body.querySelectorAll("div[role='menuitem']")).find((el) =>
         normalizeText(el.textContent).includes("delete")
+      ) ||
+      // Try finding by span or div containing delete text
+      Array.from(document.body.querySelectorAll("[role='menuitem'] span, [role='menuitem'] div")).find((el) =>
+        normalizeText(el.textContent).includes("delete")
+      )?.closest("[role='menuitem']") ||
+      // Try finding any clickable element with delete text in open menus
+      Array.from(document.body.querySelectorAll("[role='menu'] *")).find((el) =>
+        normalizeText(el.textContent) === "delete" || normalizeText(el.textContent) === "delete chat"
       );
 
     if (!deleteBtn) {
-      log("ERROR: Could not find Delete option");
+      log("ERROR: Could not find Delete option. Available menu items:",
+          allMenuItems.map(el => `"${el.textContent.trim()}"`).join(", "));
       throw new Error("Could not find Delete option");
     }
 
     log("Clicking delete button");
     deleteBtn.click();
-    await sleep(500);
+    await sleep(600);
+
+    // Debug: Log all visible buttons
+    const allButtons = Array.from(document.body.querySelectorAll("button"));
+    const visibleButtons = allButtons.filter(b => {
+      const rect = b.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+    log(`Found ${visibleButtons.length} visible buttons after clicking delete`);
 
     // Find confirmation button
     const confirm =
       findButtonByText(document.body, ["Delete", "Confirm"]) ||
       Array.from(document.body.querySelectorAll("button")).find((b) =>
-        normalizeText(b.textContent) === "delete"
-      );
+        normalizeText(b.textContent) === "delete" || normalizeText(b.textContent) === "confirm"
+      ) ||
+      // Look for red/danger buttons (delete confirmations are usually red)
+      Array.from(document.body.querySelectorAll("button")).find((b) => {
+        const text = normalizeText(b.textContent);
+        const style = window.getComputedStyle(b);
+        const bgColor = style.backgroundColor;
+        return (text.includes("delete") || text.includes("confirm")) &&
+               (bgColor.includes("rgb(220") || bgColor.includes("red"));
+      });
 
     if (!confirm) {
-      log("ERROR: Could not find confirm Delete button");
+      log("ERROR: Could not find confirm Delete button. Visible buttons:",
+          visibleButtons.slice(0, 10).map(b => `"${b.textContent.trim()}"`).join(", "));
       throw new Error("Could not find confirm Delete button");
     }
 
-    log("Clicking confirm button");
+    log("Clicking confirm button:", confirm.textContent.trim());
     confirm.click();
-    await sleep(700);
+    await sleep(800);
     log("Chat deleted successfully");
   }
 
