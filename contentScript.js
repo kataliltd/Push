@@ -6,23 +6,33 @@
   const STATE = {
     selected: new Set(),
     deleting: false,
-    deleteEndpoint: null,
+    authHeaders: {},
   };
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const log = (...args) => console.log("[CGPT Bulk Delete]", ...args);
 
-  // Intercept fetch to learn the delete API endpoint
+  // Intercept fetch to capture authentication headers
   const originalFetch = window.fetch;
   window.fetch = function(...args) {
     const [url, options] = args;
 
-    // Look for DELETE requests to conversation endpoints
-    if (options?.method === 'PATCH' && typeof url === 'string' && url.includes('/conversation')) {
-      const body = options.body ? JSON.parse(options.body) : null;
-      if (body?.is_visible === false) {
-        log("Detected delete API call:", url, body);
-        STATE.deleteEndpoint = url.split('/conversations/')[0] + '/conversations/';
+    // Capture auth headers from any backend-api request
+    if (typeof url === 'string' && url.includes('/backend-api/')) {
+      if (options?.headers) {
+        // Store important auth headers
+        const headers = options.headers;
+        if (headers['Authorization'] || headers['authorization']) {
+          STATE.authHeaders['Authorization'] = headers['Authorization'] || headers['authorization'];
+        }
+        if (headers['Cookie'] || headers['cookie']) {
+          STATE.authHeaders['Cookie'] = headers['Cookie'] || headers['cookie'];
+        }
+        if (headers['X-Authorization'] || headers['x-authorization']) {
+          STATE.authHeaders['X-Authorization'] = headers['X-Authorization'] || headers['x-authorization'];
+        }
+
+        log("Captured auth headers from ChatGPT request");
       }
     }
 
@@ -171,16 +181,20 @@
   async function deleteConversationAPI(chatId) {
     log(`Deleting chat via API: ${chatId}`);
 
-    // Try to find the API endpoint
+    // Build headers with auth
+    const headers = {
+      'Content-Type': 'application/json',
+      ...STATE.authHeaders
+    };
+
     const baseUrl = window.location.origin;
     const apiUrl = `${baseUrl}/backend-api/conversation/${chatId}`;
 
     try {
       const response = await fetch(apiUrl, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: headers,
+        credentials: 'include', // Important: include cookies
         body: JSON.stringify({
           is_visible: false
         })
@@ -200,6 +214,13 @@
 
   async function bulkDeleteSelected(sidebar) {
     if (STATE.selected.size === 0) return;
+
+    // Check if we have auth headers
+    if (Object.keys(STATE.authHeaders).length === 0) {
+      alert("Authentication not ready. Please:\n1. Click on any chat first\n2. Then try deleting\n\nThis captures the auth tokens needed.");
+      return;
+    }
+
     STATE.deleting = true;
 
     const bar = sidebar.querySelector("#cgpt-bulkbar");
