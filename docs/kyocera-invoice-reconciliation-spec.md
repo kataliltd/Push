@@ -62,6 +62,8 @@ Sessions are never deleted — only created, matched, checked, and approved. His
 
 Line items extracted from each document type get their own table so raw parses are preserved even if later re-matched:
 
+Invoice header fields to capture on `documents` (or a small `invoice_header` extension): invoice_number, invoice_date, due_date, delivery_note_no (e.g. `5139526-0` — this is the order number plus a suffix, and is the field that most directly links an invoice back to its order confirmation), order_no, net_total, vat_total, total_due.
+
 **`invoice_lines`** — item_no, description, spec_code, quantity, unit, unit_price, discount_pct, net_price, nominal_code (nullable, filled during price check)
 
 **`order_confirmation_lines`** — order_no, item_no, description, spec_code, quantity, unit, unit_price, discount_pct, net_price, shipping_date
@@ -90,6 +92,7 @@ Only one `price_lists` row is `active` at a time; it is the one used for price v
 ## 5. Matching logic (business rules)
 
 1. **Item identity across documents**: primary match key is the vendor item/product code (e.g. `ISC5592941`). Kyocera's own numbering is reasonably consistent across invoice/order-confirmation/vend-report in the sample data, so exact match should be tried first; fall back to normalized spec-code text match (strip whitespace/case) only when exact match fails, and flag those as lower-confidence matches for manual review rather than silently accepting them.
+1a. **Header-level cross-check, before line matching**: the invoice's `Order No.` (and its `Delivery Note No.`, which is the order number plus a suffix, e.g. `5139526-0`) should equal the order confirmation's `Order No.`. If a session's uploaded invoice and order confirmation don't share an order number, raise a session-level exception immediately rather than proceeding to line-level matching — this catches the case where the wrong pair of documents was uploaded to a session.
 2. **Three-way match** passes when, for a given item: quantity is equal across invoice, order confirmation, and vend report (vend report quantities are negative in the source file — treat magnitude as quantity taken), and the invoice's net price for that line equals the order confirmation's net price for that line.
 3. **Price-list check** is separate from the three-way match: invoice unit price (before the line discount shown on the invoice) is compared to the **active price list's** `current_price` (or `new_price` if today is past its effective date) for that item number. Flag if the delta exceeds a small tolerance (configurable, default £0.01 or 0.5%, whichever is greater) — this check stays a manual "tick to confirm" step even when the system finds no discrepancy, per the required workflow (auto-match, then pause for manual price check, then approve).
 4. **Exception types to surface**: missing item (present in one/two docs but not all three), quantity mismatch, price mismatch (between the three docs), price-list mismatch (invoice vs. discounted list), unreadable/unparsed line (PDF or Excel row the parser couldn't confidently extract — never silently drop a row, always surface it as an exception needing manual entry/confirmation).
@@ -153,7 +156,15 @@ Item No.    Description                  Qty  Unit  Price each  %      Net price
 ISC5592941  Iscar turning insert         14   PCS   8.05        30.00  78.89      13/07/2026
             CCMT 060202 PF IC907
 ```
-Header block also carries: Order No., Your Reference (date range, e.g. `WSF VEND 09.07-12.07`), Date of Order Confirmation, Customer No., Currency, and a totals block (Net Price, Delivery, Insurance, Battery Fee, Total Net, Total VAT 20%, Total amount due). Invoices are expected to follow a very similar Kyocera layout (no invoice sample was provided for this project — see open questions).
+Header block also carries: Order No., Your Reference (date range, e.g. `WSF VEND 09.07-12.07`), Date of Order Confirmation, Customer No., Currency, and a totals block (Net Price, Delivery, Insurance, Battery Fee, Total Net, Total VAT 20%, Total amount due).
+
+**Invoice (PDF) — confirmed against a real sample, matches the order confirmation almost exactly:**
+```
+Item No.    Description                  Qty  Unit  Price each  %      Net price
+ISC5592941  Iscar turning insert         14   PCS   8.05        30.00  78.89
+            CCMT 060202 PF IC907
+```
+Same item numbers, quantities, unit prices, discount %, and net prices as the order confirmation for the same order (confirms the assumption that one parser can serve both document types). Differences from the order confirmation layout: no `Shipping Date` column; header adds `Invoice Number`, `Invoice Date`, `Due Date`, and `Delivery Note No.` (the order number plus a suffix, e.g. `5139526-0` for order `5139526` — the field that ties an invoice back to its order confirmation); footer adds bank details and "Any price discrepancy should be reported within 21 days". Totals block layout: Net Price, Delivery/Insurance, Total Net, Total VAT 20%, Total amount due.
 
 **Vend report (`.xls`, hierarchical, not flat):**
 ```
@@ -171,7 +182,6 @@ This is a separate vendor-facing form (consignment stock requests, different acc
 
 ## 12. Open questions / assumptions to flag back to the user
 
-- No actual Kyocera **invoice** PDF sample was available — this spec assumes it mirrors the order confirmation's layout closely enough to reuse the same parser, but that should be verified against a real invoice before relying on it.
 - Return/credit handling on the vend report is unconfirmed (action item: check with Simon) — built as "flag, don't fail" rather than a full workflow for now.
 - Backup/DR strategy for session and price-list data is still being scoped with the vendor/infra side — treat §8's note as a placeholder, not a spec to build against yet.
 - Automated extraction from secured PDFs is unproven — budget for the manual-conversion fallback being the common path initially, with automation as a stretch goal once more secured-PDF samples are tested.
